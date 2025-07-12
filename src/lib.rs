@@ -1,3 +1,5 @@
+#![allow(unsafe_op_in_unsafe_fn)] // Suppresses a warning.
+
 //! This library provides high-level access to STM32 peripherals.
 //!
 //! **Current family support**: F3, F4, L4, L5, G0, G4, H7, and WB. U5 is planned once its SVD files and PAC
@@ -206,6 +208,9 @@ pub(crate) const MAX_ITERS: u32 = 300_000; // todo: What should this be?
     feature = "h7b3",
     feature = "wb55",
     feature = "wle5",
+    feature = "c011",
+    feature = "c031",
+    feature = "c071",
 )))]
 compile_error!("This crate requires an MCU-specifying feature to be enabled. eg `l552`.");
 
@@ -215,6 +220,13 @@ compile_error!("This crate requires an MCU-specifying feature to be enabled. eg 
 // todo: U5 once SVD is out.
 use cfg_if::cfg_if;
 use cortex_m::{self, delay::Delay};
+// C0 PAC
+#[cfg(feature = "c011")]
+pub use stm32c0::stm32c011 as pac;
+#[cfg(feature = "c031")]
+pub use stm32c0::stm32c031 as pac;
+#[cfg(feature = "c071")]
+pub use stm32c0::stm32c071 as pac;
 #[cfg(feature = "f3x4")]
 pub use stm32f3::stm32f3x4 as pac;
 #[cfg(feature = "f301")]
@@ -346,37 +358,30 @@ pub use stm32wl::stm32wle5 as pac;
 
 pub mod macros;
 
-#[cfg(not(any(feature = "f301", feature = "f302")))]
+#[cfg(not(any(feature = "f301", feature = "f302", feature = "c0")))]
 pub mod adc;
 
 // bxCAN families: F3, F4, L4,
-// fdCAN families: L5, U5, G4, H7
+// fdCAN families: L5, U5, G4, H7, C0
 // H7 suppords fd and can_ccu. (What's that?)
 // WB and WL?
+// todo: Support c0, if/when `fdcan supports it.`
 #[cfg(all(any(feature = "can_bx", feature = "can_fd_g", feature = "can_fd_h"),))]
 pub mod can;
 
-// For now, we're using the `fdcan` crate
-// #[cfg(any(feature = "g0c1", feature = "g4", feature = "h7"))]
-// pub mod fd_can;
-
 pub mod clocks;
-// todo: You could get CRC working on these.
-#[cfg(not(any(
-    feature = "f",
-    feature = "wb",
-    feature = "wl",
-    feature = "h5", // todo: COme back to
-)))]
+
+#[cfg(not(any(feature = "f", feature = "wb", feature = "wl",)))]
 pub mod crc;
 
 #[cfg(not(any(
     feature = "f401",
     feature = "f411",
     feature = "f412",
+    feature = "l412",
     feature = "wb",
     feature = "g0",
-    feature = "h5", // todo: H5 DAC pending PAC fix.
+    feature = "c0",
 )))]
 // WB doesn't have a DAC. Some G0 variants do - add it! Most F4 variants have it, some don't
 pub mod dac;
@@ -392,18 +397,20 @@ pub mod dac;
     feature = "g4",
     feature = "wb",
     feature = "wl",
-    feature = "h5", // todo: Check PAC.
+    feature = "h5", // todo: Check PAC and impl A/R.
+    feature = "c0",
 // todo: DFSDM support for other platforms that don't support clustering
 )))]
 pub mod dfsdm;
 
-#[cfg(not(any(feature = "f4", feature = "l552", feature = "h5")))]
+#[cfg(not(feature = "f4"))]
 pub mod dma;
 
 #[cfg(all(feature = "h7", feature = "net"))]
 pub mod ethernet;
 
-#[cfg(not(feature = "h5"))] // todo: Come back to
+// todo: July 2025. Fix h735 flash, and put back. Mess of feature gate changes from 0.16 PAC.
+#[cfg(not(feature = "h735"))]
 pub mod flash;
 
 // todo: PAC doesn't yet support these newer H7 MCUs that use FMAC.
@@ -447,53 +454,54 @@ feature = "g4a1",
 feature = "wl",
 feature = "l5", // todo: PAC errors on some regs.
 feature = "h5",
+feature = "c0",
 )))]
 pub mod qspi;
 
 // Note: Some F4 variants support RNG, but we haven't figured out the details yet. Send a PR if interested.
-#[cfg(not(any(
-    feature = "f",
-    feature = "g030",
-    feature = "g031",
-    feature = "g070",
-    feature = "g071",
-    feature = "g0b1",
-    feature = "g0c1",
-)))]
+#[cfg(not(any(feature = "f", feature = "g0", feature = "c0",)))]
 pub mod rng;
 
+#[cfg(not(feature = "c0"))] // todo
 pub mod rtc;
 
 #[cfg(not(any(
     feature = "f",
     feature = "g0",
-    // feature = "g4", // todo: G4 PAC issue re getting channel-specific reg blocks.
     feature = "h7b3",
     feature = "wl",
     feature = "h5", // todo
+    feature = "c0", // todo
+    feature = "l412",
 )))]
 pub mod sai;
 
-#[cfg(not(feature = "h5"))] // todo: Add H5 SPI!
+// as of Pac 0.16, unable to find spi1 reg for f301. (Renamed to something else?)
+#[cfg(not(feature = "f301"))]
 pub mod spi;
 
-#[cfg(not(feature = "h5"))] // todo temp
 pub mod timer;
 
-// #[cfg(not(feature = "h5"))] // todo temp. Needs CR1 and ISR added, among other things.
 pub mod usart;
 
 // todo: More MCUs A/R. They will need modifications in the module.
-#[cfg(not(any(feature = "f", feature = "l", feature = "g0", feature = "wl")))]
+#[cfg(not(any(
+    feature = "f",
+    feature = "l",
+    feature = "g0",
+    feature = "wl",
+    feature = "c0"
+)))]
 pub mod lpuart;
 
-#[cfg(any(
-    feature = "l4",
-    // feature = "g4",
-    feature = "g473", // todo: Not compiling on G431
-    feature = "h7"
-))]
-pub mod comp;
+// todo: Fix and put this back when ready. Broke after PAC 0.16 update. (July 2025)
+// #[cfg(any(
+//     feature = "l4",
+//     // feature = "g4",
+//     feature = "g473", // todo: Not compiling on G431
+//     feature = "h7"
+// ))]
+// pub mod comp;
 
 // See note at top of `usb` module for info on G0; not avail on modules the PAC has avail.
 cfg_if! {
@@ -509,6 +517,7 @@ cfg_if! {
                 feature = "l5",
                 feature = "g4",
                 feature = "wb",
+                feature = "c071", // Only C071 from C0 has USB.
             ),
         not(feature = "g4a1"))
     ))] {
@@ -531,7 +540,7 @@ mod util;
 pub use util::{BaudPeriph, RccPeriph};
 
 // todo: Remove this debug_workaroudn function on MCUs that don't require it. Ie, is this required on G4? G0?
-#[cfg(not(any(feature = "g0")))]
+#[cfg(not(any(feature = "g0", feature = "c0", feature = "h747cm4")))]
 /// Workaround due to debugger disconnecting in WFI (and low-power) modes.
 /// This affects most (all?) STM32 devices. In production on battery-powered
 /// devices that don't use DMA, consider removing this, to prevent power
@@ -542,18 +551,18 @@ pub fn debug_workaround() {
 
     cfg_if! {
         if #[cfg(all(feature = "h7", not(any(feature = "h747cm4", feature = "h747cm7"))))] {
-            dbgmcu.cr.modify(|_, w| w.dbgsleep_d1().set_bit());
-            dbgmcu.cr.modify(|_, w| w.dbgstop_d1().set_bit());
-            dbgmcu.cr.modify(|_, w| w.dbgstby_d1().set_bit());
+            dbgmcu.cr().modify(|_, w| w.dbgsleep_d1().bit(true));
+            dbgmcu.cr().modify(|_, w| w.dbgstop_d1().bit(true));
+            dbgmcu.cr().modify(|_, w| w.dbgstby_d1().bit(true));
         } else if #[cfg(feature = "h7")] {
-            dbgmcu.cr.modify(|_, w| w.dbgslpd1().set_bit());
-            dbgmcu.cr.modify(|_, w| w.dbgstpd1().set_bit());
-            dbgmcu.cr.modify(|_, w| w.dbgstbd1().set_bit());
+            dbgmcu.cr().modify(|_, w| w.dbgslpd1().bit(true));
+            dbgmcu.cr().modify(|_, w| w.dbgstpd1().bit(true));
+            dbgmcu.cr().modify(|_, w| w.dbgstbd1().bit(true));
         } else {
             #[cfg(not(any(feature = "l5", feature = "h5")))]
-            dbgmcu.cr.modify(|_, w| w.dbg_sleep().set_bit());
-            dbgmcu.cr.modify(|_, w| w.dbg_stop().set_bit());
-            dbgmcu.cr.modify(|_, w| w.dbg_standby().set_bit());
+            dbgmcu.cr().modify(|_, w| w.dbg_sleep().bit(true));
+            dbgmcu.cr().modify(|_, w| w.dbg_stop().bit(true));
+            dbgmcu.cr().modify(|_, w| w.dbg_standby().bit(true));
         }
     }
 
@@ -564,11 +573,11 @@ pub fn debug_workaround() {
 
     cfg_if! {
         if #[cfg(feature = "f3")] {
-            rcc.ahbenr.modify(|_, w| w.dma1en().set_bit());
+            rcc.ahbenr().modify(|_, w| w.dma1en().bit(true));
         } else if #[cfg(feature = "h5")] {
-            rcc.ahb1enr.modify(|_, w| w.gpdma1en().set_bit());
+            rcc.ahb1enr().modify(|_, w| w.gpdma1en().bit(true));
         } else {
-            rcc.ahb1enr.modify(|_, w| w.dma1en().set_bit());
+            rcc.ahb1enr().modify(|_, w| w.dma1en().bit(true));
         }
     }
 }

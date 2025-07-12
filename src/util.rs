@@ -21,8 +21,10 @@ use crate::{
     feature = "f401",
     feature = "f411",
     feature = "f412",
+    feature = "l412",
     feature = "wb",
-    feature = "g0"
+    feature = "g0",
+    feature = "c0",
 )))]
 cfg_if! {
     if #[cfg(any(feature = "f3", feature = "l412", feature = "g4", feature = "h7b3"))] {
@@ -33,7 +35,7 @@ cfg_if! {
 }
 
 cfg_if! {
-    if #[cfg(any(feature = "l5", feature = "g0", feature = "wl"))] {
+    if #[cfg(any(feature = "g0", feature = "c0", feature = "wl"))] {
         use crate::pac::ADC as ADC1;
 
     } else {
@@ -51,21 +53,21 @@ macro_rules! rcc_en_reset {
     (apb1, $periph:expr, $rcc:expr) => {
         paste::paste! { cfg_if::cfg_if! {
             if #[cfg(any(feature = "f3", feature = "f4"))] {
-                $rcc.apb1enr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.apb1rstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.apb1rstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
+                $rcc.apb1enr().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.apb1rstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.apb1rstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
             } else if #[cfg(any(feature = "l4", feature = "l5", feature = "g4", feature = "wb", feature = "wl"))] {
-                $rcc.apb1enr1.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.apb1rstr1.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.apb1rstr1.modify(|_, w| w.[<$periph rst>]().clear_bit());
-            } else if #[cfg(feature = "g0")] {
-                $rcc.apbenr1.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.apbrstr1.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.apbrstr1.modify(|_, w| w.[<$periph rst>]().clear_bit());
+                $rcc.apb1enr1().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.apb1rstr1().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.apb1rstr1().modify(|_, w| w.[<$periph rst>]().clear_bit());
+            } else if #[cfg(any(feature = "g0", feature = "c0"))] {
+                $rcc.apbenr1().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.apbrstr1().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.apbrstr1().modify(|_, w| w.[<$periph rst>]().clear_bit());
             } else {  // H7
-                $rcc.apb1lenr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.apb1lrstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.apb1lrstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
+                $rcc.apb1lenr().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.apb1lrstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.apb1lrstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
                 // todo: apb1h equivs
             }
             // todo: apb1enr2 on L5? Currently we only use it with USB, which is handled in
@@ -75,70 +77,72 @@ macro_rules! rcc_en_reset {
     };
     (apb2, $periph:expr, $rcc:expr) => {
         paste::paste! { cfg_if::cfg_if! {
-            if #[cfg(feature = "g0")] {
-                $rcc.apbenr2.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.apbrstr2.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.apbrstr2.modify(|_, w| w.[<$periph rst>]().clear_bit());
+            if #[cfg(any(feature = "g0", feature = "c0"))] {
+                $rcc.apbenr2().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.apbrstr2().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.apbrstr2().modify(|_, w| w.[<$periph rst>]().clear_bit());
             } else {
-                $rcc.apb2enr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.apb2rstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.apb2rstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
+                $rcc.apb2enr().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.apb2rstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.apb2rstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
             }
         }}
     };
     (apb4, $periph:expr, $rcc:expr) => {
         paste::paste! {
-            $rcc.apb4enr.modify(|_, w| w.[<$periph en>]().set_bit());
-            $rcc.apb4rstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-            $rcc.apb4rstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
+            $rcc.apb4enr().modify(|_, w| w.[<$periph en>]().bit(true));
+            $rcc.apb4rstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+            $rcc.apb4rstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
         }
     };
     (ahb1, $periph:expr, $rcc:expr) => {
         paste::paste! { cfg_if::cfg_if! {
             if #[cfg(feature = "f3")] {
-                $rcc.ahbenr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.ahbrstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.ahbrstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
-            } else if #[cfg(feature = "g0")] {
-                $rcc.ahbenr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.ahbrstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.ahbrstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
+                $rcc.ahbenr().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.ahbrstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.ahbrstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
+            } else if #[cfg(any(feature = "g0", feature = "c0"))] {
+                $rcc.ahbenr().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.ahbrstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.ahbrstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
             } else {
-                $rcc.ahb1enr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.ahb1rstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.ahb1rstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
+                $rcc.ahb1enr().modify(|_, w| w.[<$periph en>]().bit(true));
+                $rcc.ahb1rstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+                $rcc.ahb1rstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
             }
         }}
     };
     (ahb2, $periph:expr, $rcc:expr) => {
-        paste::paste! { cfg_if::cfg_if! {
-            if #[cfg(feature = "placeholder")] {
-            } else {
-                $rcc.ahb2enr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.ahb2rstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.ahb2rstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
-            }
-        }}
+        paste::paste! {
+            $rcc.ahb2enr().modify(|_, w| w.[<$periph en>]().bit(true));
+            $rcc.ahb2rstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+            $rcc.ahb2rstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
+        }
     };
     (ahb3, $periph:expr, $rcc:expr) => {
-        paste::paste! { cfg_if::cfg_if! {
-            if #[cfg(feature = "placeholder")] {
-            } else {
-                $rcc.ahb3enr.modify(|_, w| w.[<$periph en>]().set_bit());
-                $rcc.ahb3rstr.modify(|_, w| w.[<$periph rst>]().set_bit());
-                $rcc.ahb3rstr.modify(|_, w| w.[<$periph rst>]().clear_bit());
-            }
-        }}
+        paste::paste! {
+            $rcc.ahb3enr().modify(|_, w| w.[<$periph en>]().bit(true));
+            $rcc.ahb3rstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+            $rcc.ahb3rstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
+        }
+    };
+    // C0's pac v 0.16 calls it this, although it's actually ahb4.
+    (ahb, $periph:expr, $rcc:expr) => {
+        paste::paste! {
+            $rcc.ahbenr().modify(|_, w| w.[<$periph en>]().bit(true));
+            $rcc.ahbrstr().modify(|_, w| w.[<$periph rst>]().bit(true));
+            $rcc.ahbrstr().modify(|_, w| w.[<$periph rst>]().clear_bit());
+        }
     };
 }
 
-#[cfg(not(any(feature = "f", feature = "g0", feature = "l")))]
+#[cfg(not(any(feature = "f", feature = "g0", feature = "c0", feature = "l")))]
 macro_rules! rcc_en_reset_apb1enr2 {
     ($periph:expr, $rcc:expr) => {
         paste::paste! {
-            $rcc.apb1enr2.modify(|_, w| w.[<$periph en>]().set_bit());
-            $rcc.apb1rstr2.modify(|_, w| w.[<$periph rst>]().set_bit());
-            $rcc.apb1rstr2.modify(|_, w| w.[<$periph rst>]().clear_bit());
+            $rcc.apb1enr2().modify(|_, w| w.[<$periph en>]().bit(true));
+            $rcc.apb1rstr2().modify(|_, w| w.[<$periph rst>]().bit(true));
+            $rcc.apb1rstr2().modify(|_, w| w.[<$periph rst>]().clear_bit());
         }
     };
 }
@@ -171,6 +175,7 @@ impl BaudPeriph for pac::USART2 {
     feature = "f413",
     feature = "l4x1",
     feature = "g0",
+    feature = "c0",
     feature = "wb",
     feature = "wl",
 )))]
@@ -233,7 +238,13 @@ cfg_if! {
     }
 }
 
-#[cfg(not(any(feature = "f", feature = "g0", feature = "wl", feature = "l")))]
+#[cfg(not(any(
+    feature = "f",
+    feature = "g0",
+    feature = "c0",
+    feature = "wl",
+    feature = "l"
+)))]
 impl BaudPeriph for pac::LPUART1 {
     fn baud(clock_cfg: &Clocks) -> u32 {
         clock_cfg.apb1()
@@ -325,6 +336,9 @@ pub trait RccPeriph {
     feature = "g041",
     feature = "g070",
     feature = "g030",
+    feature = "g051",
+    feature = "g061",
+    feature = "c0",
     feature = "wb",
     feature = "wl"
 )))]
@@ -364,8 +378,12 @@ impl RccPeriph for pac::TIM6 {
     feature = "g041",
     feature = "g070",
     feature = "g030",
+    feature = "g051",
+    feature = "g061",
+    feature = "c0",
     feature = "wb",
-    feature = "wl"
+    feature = "wl",
+    feature = "l412",
 )))]
 impl RccPeriph for pac::TIM7 {
     fn en_reset(rcc: &RegisterBlock) {
@@ -419,7 +437,7 @@ impl RccPeriph for pac::I2C1 {
     }
 }
 
-#[cfg(not(any(feature = "wb", feature = "f3x4")))]
+#[cfg(not(any(feature = "wb", feature = "f3x4", feature = "c0")))]
 impl RccPeriph for pac::I2C2 {
     fn en_reset(rcc: &RegisterBlock) {
         rcc_en_reset!(apb1, i2c2, rcc);
@@ -487,7 +505,13 @@ impl RccPeriph for pac::SPI1 {
     }
 }
 
-#[cfg(not(any(feature = "f3x4", feature = "wb", feature = "wl")))]
+#[cfg(not(any(
+    feature = "f3x4",
+    feature = "wb",
+    feature = "wl",
+    feature = "c0",
+    feature = "g061"
+)))]
 impl RccPeriph for pac::SPI2 {
     fn en_reset(rcc: &RegisterBlock) {
         rcc_en_reset!(apb1, spi2, rcc);
@@ -518,17 +542,19 @@ impl RccPeriph for pac::SPI2 {
     feature = "f3x4",
     feature = "f410",
     feature = "g0",
+    feature = "c0",
     feature = "wb",
-    feature = "wl"
+    feature = "wl",
+    feature = "l412",
 )))]
 impl RccPeriph for pac::SPI3 {
     fn en_reset(rcc: &RegisterBlock) {
         cfg_if! {
             // Note `sp3en` mixed with `spi3rst`; why we can't use the usual macro.
             if #[cfg(feature = "l5")] {
-                rcc.apb1enr1.modify(|_, w| w.sp3en().set_bit());
-                rcc.apb1rstr1.modify(|_, w| w.spi3rst().set_bit());
-                rcc.apb1rstr1.modify(|_, w| w.spi3rst().clear_bit());
+                rcc.apb1enr1().modify(|_, w| w.sp3en().bit(true));
+                rcc.apb1rstr1().modify(|_, w| w.spi3rst().bit(true));
+                rcc.apb1rstr1().modify(|_, w| w.spi3rst().clear_bit());
             } else {
                 rcc_en_reset!(apb1, spi3, rcc);
             }
@@ -562,8 +588,8 @@ impl RccPeriph for pac::SPI4 {
         cfg_if! {
             // Note `sp4en` mixed with `spi4rst`; why we can't use the usual macro.
             if #[cfg(feature = "l5")] {
-                rcc.apb2enr1.modify(|_, w| w.sp4en().set_bit());
-                rcc.apb2rstr1.modify(|_, w| w.spi4rst().set_bit());
+                rcc.apb2enr1().modify(|_, w| w.sp4en().bit(true));
+                rcc.apb2rstr1.modify(|_, w| w.spi4rst().bit(true));
                 rcc.apb2rstr1.modify(|_, w| w.spi4rst().clear_bit());
             } else {
                 rcc_en_reset!(apb2, spi4, rcc);
@@ -576,9 +602,11 @@ impl RccPeriph for pac::SPI4 {
     feature = "f3",
     feature = "f4",
     feature = "g0",
+    feature = "c0",
     feature = "g4", // todo: G4 PAC issue re getting channel-specific reg blocks.
     feature = "h7b3",
-    feature = "wl"
+    feature = "wl",
+    feature = "l412",
 )))]
 impl RccPeriph for pac::SAI1 {
     fn en_reset(rcc: &RegisterBlock) {
@@ -754,9 +782,9 @@ impl RccPeriph for pac::USART2 {
                 rcc_en_reset!(apb1, usart2, rcc);
             } else {
                 // `usart` vs `uart`
-                rcc.apb1enr.modify(|_, w| w.usart2en().set_bit());
-                rcc.apb1rstr.modify(|_, w| w.usart2rst().set_bit());
-                rcc.apb1rstr.modify(|_, w| w.usart2rst().clear_bit());
+                rcc.apb1enr().modify(|_, w| w.usart2en().bit(true));
+                rcc.apb1rstr().modify(|_, w| w.usart2rst().bit(true));
+                rcc.apb1rstr().modify(|_, w| w.usart2rst().clear_bit());
             }
         }
     }
@@ -790,6 +818,7 @@ impl RccPeriph for pac::USART2 {
     feature = "f413",
     feature = "l4x1",
     feature = "g0",
+    feature = "c0",
     feature = "wb",
     feature = "wl",
 )))]
@@ -799,9 +828,9 @@ impl RccPeriph for pac::USART3 {
             if #[cfg(not(feature = "f4"))] {
                 rcc_en_reset!(apb1, usart3, rcc);
             } else {
-                rcc.apb1enr.modify(|_, w| w.usart3en().set_bit());
-                rcc.apb1rstr.modify(|_, w| w.usart3rst().set_bit());
-                rcc.apb1rstr.modify(|_, w| w.usart3rst().clear_bit());
+                rcc.apb1enr().modify(|_, w| w.usart3en().bit(true));
+                rcc.apb1rstr().modify(|_, w| w.usart3rst().bit(true));
+                rcc.apb1rstr().modify(|_, w| w.usart3rst().clear_bit());
             }
         }
     }
@@ -920,7 +949,13 @@ cfg_if! {
     }
 }
 
-#[cfg(not(any(feature = "f", feature = "g0", feature = "wl", feature = "l")))]
+#[cfg(not(any(
+    feature = "f",
+    feature = "g0",
+    feature = "wl",
+    feature = "l",
+    feature = "c0"
+)))]
 impl RccPeriph for pac::LPUART1 {
     fn en_reset(rcc: &RegisterBlock) {
         #[cfg(not(feature = "h7"))]
@@ -991,7 +1026,9 @@ impl RccPeriph for pac::LPUART1 {
     feature = "f411",
     feature = "f412",
     feature = "wb",
-    feature = "g0"
+    feature = "g0",
+    feature = "c0",
+    feature = "l412",
 )))]
 cfg_if! {
     if #[cfg(all(feature = "h7", not(feature = "h7b3")))] {
@@ -1061,7 +1098,7 @@ cfg_if! {
         impl RccPeriph for DAC1 {
             fn en_reset(rcc: &RegisterBlock) {
                 #[cfg(feature = "wl")]
-                rcc.apb1enr1.modify(|_, w| w.dac1en().set_bit());
+                rcc.apb1enr1().modify(|_, w| w.dac1en().bit(true));
                 #[cfg(not(feature = "wl"))]
                 rcc_en_reset!(apb1, dac1, rcc);
             }

@@ -24,7 +24,7 @@ macro_rules! set_register_sem {
             $regs.[<r $semaphore_num>].modify(|_, w| {
                 w.procid().bits($proc_id);
                 w.coreid().bits($core_id);
-                w.lock().set_bit()
+                w.lock().bit(true)
             })
         }
     };
@@ -35,14 +35,14 @@ impl Hsem {
     pub fn new(regs: HSEM) -> Self {
         let mut rcc = unsafe { &(*RCC::ptr()) };
 
-        rcc.ahb3enr.modify(|_, w| w.hsemen().set_bit());
-        rcc.ahb3rstr.modify(|_, w| w.hsemrst().set_bit());
-        rcc.ahb3rstr.modify(|_, w| w.hsemrst().clear_bit());
+        rcc.ahb3enr().modify(|_, w| w.hsemen().bit(true));
+        rcc.ahb3rstr().modify(|_, w| w.hsemrst().bit(true));
+        rcc.ahb3rstr().modify(|_, w| w.hsemrst().clear_bit());
 
         // todo: Why are these missing here and on IPCC `new`?
-        // rcc.ahb4enr.modify(|_, w| w.hsemen().set_bit());
-        // rcc.ahb4rstr.modify(|_, w| w.hsemrst().set_bit());
-        // rcc.ahb4rstr.modify(|_, w| w.hsemrst().clear_bit());
+        // rcc.ahb4enr().modify(|_, w| w.hsemen().bit(true));
+        // rcc.ahb4rstr().modify(|_, w| w.hsemrst().bit(true));
+        // rcc.ahb4rstr().modify(|_, w| w.hsemrst().clear_bit());
 
         Self { regs }
     }
@@ -117,15 +117,15 @@ impl Hsem {
         // Cnier doesn't have individual fields
         match core {
             Core::C1 => {
-                let orig_value = self.regs.c1ier.read().bits();
+                let orig_value = self.regs.c1ier().read().bits();
                 self.regs
-                    .c1ier
+                    .c1ier()
                     .write(|w| unsafe { w.bits(orig_value | (1 << semaphore_num)) });
             }
             Core::C2 => {
-                let orig_value = self.regs.c2ier.read().bits();
+                let orig_value = self.regs.c2ier().read().bits();
                 self.regs
-                    .c2ier
+                    .c2ier()
                     .write(|w| unsafe { w.bits(orig_value | (1 << semaphore_num)) });
             }
         }
@@ -140,15 +140,15 @@ impl Hsem {
         // todo: Do we need to read, or can we just do a write of the relevant bit
         match core {
             Core::C1 => {
-                let orig_value = self.regs.c1icr.read().bits();
+                let orig_value = self.regs.c1icr().read().bits();
                 self.regs
-                    .c1icr
+                    .c1icr()
                     .write(|w| unsafe { w.bits(orig_value | (1 << semaphore_num)) });
             }
             Core::C2 => {
-                let orig_value = self.regs.c2icr.read().bits();
+                let orig_value = self.regs.c2icr().read().bits();
                 self.regs
-                    .c2icr
+                    .c2icr()
                     .write(|w| unsafe { w.bits(orig_value | (1 << semaphore_num)) });
             }
         }

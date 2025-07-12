@@ -20,10 +20,15 @@
  Strangely, the register modification commands for the l4x5 have OTG in their names
 */
 
+use core::borrow::BorrowMut;
+
 use cfg_if::cfg_if;
 pub use stm32_usbd::UsbBus;
 use stm32_usbd::UsbPeripheral;
 
+// use usb_device::{bus::UsbBusAllocator, prelude::*};
+// use usb_device::class_prelude::UsbBus as UsbBus_;
+// use usbd_serial::{self, SerialPort};
 #[cfg(any(feature = "l4", feature = "l5", feature = "g0"))]
 use crate::pac::PWR;
 use crate::{pac, pac::USB, util::rcc_en_reset};
@@ -60,6 +65,9 @@ unsafe impl UsbPeripheral for Peripheral {
     #[cfg(feature = "g0")]
     const EP_MEMORY: *const () = 0x4000_5c00 as _;
 
+    #[cfg(feature = "c0")]
+    const EP_MEMORY: *const () = 0x4000_5c00 as _; // Table 7
+
     #[cfg(any(feature = "f3", feature = "g4"))]
     const EP_MEMORY: *const () = 0x4000_6000 as _;
 
@@ -76,12 +84,15 @@ unsafe impl UsbPeripheral for Peripheral {
     #[cfg(feature = "g0")]
     const EP_MEMORY_SIZE: usize = 2_048;
 
+    #[cfg(feature = "c0")]
+    const EP_MEMORY_SIZE: usize = 2_048; // Table 154.
+
     // Endpoint memory access scheme.
     // Set to `true` if "2x16 bits/word" access scheme is used, otherwise set to `false`.
     #[cfg(any(feature = "l4", feature = "l5", feature = "g4", feature = "wb"))]
     const EP_MEMORY_ACCESS_2X16: bool = true;
 
-    #[cfg(any(feature = "f3", feature = "g0"))]
+    #[cfg(any(feature = "f3", feature = "g0", feature = "c0"))]
     // F3 uses 1x16 or 2x16 depending on variant. G0 uses a 32-bit word.
     const EP_MEMORY_ACCESS_2X16: bool = false;
 
@@ -98,13 +109,13 @@ unsafe impl UsbPeripheral for Peripheral {
                     }
                 }
             } else if #[cfg(feature = "l5")] {
-                rcc.apb1enr2.modify(|_, w| w.usbfsen().set_bit());
-                rcc.apb1rstr2.modify(|_, w| w.usbfsrst().set_bit());
-                rcc.apb1rstr2.modify(|_ , w| w.usbfsrst().clear_bit());
+                rcc.apb1enr2().modify(|_, w| w.usbfsen().bit(true));
+                rcc.apb1rstr2().modify(|_, w| w.usbfsrst().bit(true));
+                rcc.apb1rstr2().modify(|_ , w| w.usbfsrst().clear_bit());
             } else if #[cfg(feature = "wb")] {
-                rcc.apb1enr1.modify(|_, w| w.usben().set_bit());
-                rcc.apb1rstr1.modify(|_, w| w.usbfsrst().set_bit());
-                rcc.apb1rstr1.modify(|_ , w| w.usbfsrst().clear_bit());
+                rcc.apb1enr1().modify(|_, w| w.usben().bit(true));
+                rcc.apb1rstr1().modify(|_, w| w.usbfsrst().bit(true));
+                rcc.apb1rstr1().modify(|_ , w| w.usbfsrst().clear_bit());
             } else { // G0, G4
                 rcc_en_reset!(apb1, usb, rcc);
             }
@@ -129,5 +140,33 @@ pub type UsbBusType = UsbBus<Peripheral>;
 pub fn enable_usb_pwr() {
     // Enable VddUSB
     let pwr = unsafe { &*pac::PWR::ptr() };
-    pwr.cr2.modify(|_, w| w.usv().set_bit());
+    pwr.cr2().modify(|_, w| w.usv().bit(true));
 }
+
+// todo: We need to sort out the SerialPort traits to makme this work. Non-trivial.
+
+// /// Helper to handle chunked USB writing. Blocks.
+// pub fn write_usb<B: UsbBus_, RS: BorrowMut<[u8]>, WS: BorrowMut<[u8]>>(
+//     usb_serial: SerialPort<'static, B, RS, WS>,
+//     usb_dev: &mut UsbDevice<'static, UsbBusType>,
+//     buf: &[u8],
+//     msg_len: usize
+// ) {
+//     let mut offset = 0;
+//     while offset < msg_len {
+//         match usb_serial.write(&buf[offset..msg_len]) {
+//             Ok(0) | Err(UsbError::WouldBlock) => {
+//                 usb_dev.poll(&mut [usb_serial]);
+//             }
+//             Ok(written) => offset += written,
+//             Err(e) => {
+//                 // defmt::warn!("USB write error: {:?}", e);
+//                 break;
+//             }
+//         }
+//     }
+
+//     while usb_serial.flush().err() == Some(UsbError::WouldBlock) {
+//         usb_dev.poll(&mut [usb_serial]);
+//     }
+// }

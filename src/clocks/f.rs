@@ -389,7 +389,7 @@ pub struct Clocks {
 impl Clocks {
     /// Setup common and return a `Valid` status if the config is valid. Return
     /// `Invalid`, and don't setup if not.
-    /// https://docs.rs/stm32f3xx-hal/0.5.0/stm32f3xx_hal/rcc/struct.CFGR.html
+    /// <https://docs.rs/stm32f3xx-hal/0.5.0/stm32f3xx_hal/rcc/struct.cfgr().html>
     /// Use the STM32CubeIDE Clock Configuration tab to help.
     pub fn setup(&self) -> Result<(), RccError> {
         if let Err(e) = self.validate_speeds() {
@@ -407,7 +407,7 @@ impl Clocks {
         let hclk = sysclk / self.hclk_prescaler.value() as u32;
         cfg_if! {
             if #[cfg(feature = "f3")] {  // RM section 4.5.1
-                flash.acr.modify(|_, w| unsafe {
+                flash.acr().modify(|_, w| unsafe {
                     if hclk <= 24_000_000 {
                         w.latency().bits(WaitState::W0 as u8)
                     } else if hclk <= 48_000_000 {
@@ -417,7 +417,7 @@ impl Clocks {
                     }
                 });
             } else {  // F4
-                flash.acr.modify(|_, w| unsafe {
+                flash.acr().modify(|_, w| unsafe {
                     if hclk <= 30_000_000 {
                         w.latency().bits(WaitState::W0 as u8)
                     } else if hclk <= 60_000_000 {
@@ -453,43 +453,43 @@ impl Clocks {
         // Enable oscillators, and wait until ready.
         match self.input_src {
             InputSrc::Hse(_) => {
-                rcc.cr.modify(|_, w| w.hseon().bit(true));
+                rcc.cr().modify(|_, w| w.hseon().bit(true));
                 // Wait for the HSE to be ready.
-                while rcc.cr.read().hserdy().is_not_ready() {}
+                while rcc.cr().read().hserdy().is_not_ready() {}
             }
             InputSrc::Hsi => {
-                rcc.cr.modify(|_, w| w.hsion().bit(true));
-                while rcc.cr.read().hsirdy().is_not_ready() {}
+                rcc.cr().modify(|_, w| w.hsion().bit(true));
+                while rcc.cr().read().hsirdy().is_not_ready() {}
             }
             InputSrc::Pll(pll_src) => {
                 match pll_src {
                     PllSrc::Hse(_) => {
                         // DRY
-                        rcc.cr.modify(|_, w| w.hseon().bit(true));
-                        while rcc.cr.read().hserdy().is_not_ready() {}
+                        rcc.cr().modify(|_, w| w.hseon().bit(true));
+                        while rcc.cr().read().hserdy().is_not_ready() {}
                     }
                     _ => {
                         // Hsi or HsiDiv2: In both cases, set up the HSI.
-                        rcc.cr.modify(|_, w| w.hsion().bit(true));
-                        while rcc.cr.read().hsirdy().is_not_ready() {}
+                        rcc.cr().modify(|_, w| w.hsion().bit(true));
+                        while rcc.cr().read().hsirdy().is_not_ready() {}
                     }
                 }
             }
         }
-        rcc.cr.modify(|_, w| {
+        rcc.cr().modify(|_, w| {
             // Enable bypass mode on HSE, since we're using a ceramic oscillator.
             w.hsebyp().bit(self.hse_bypass)
         });
 
         if let InputSrc::Pll(pll_src) = self.input_src {
             // Turn off the PLL: Required for modifying some of the settings below.
-            rcc.cr.modify(|_, w| w.pllon().off());
+            rcc.cr().modify(|_, w| w.pllon().off());
             // Wait for the PLL to no longer be ready before executing certain writes.
-            while rcc.cr.read().pllrdy().is_ready() {}
+            while rcc.cr().read().pllrdy().is_ready() {}
 
             cfg_if! {
                 if #[cfg(feature = "f3")] {
-                   rcc.cfgr.modify(|_, w| {
+                   rcc.cfgr().modify(|_, w| unsafe {
                     // Some f3 varients uses a 'bit' field instead. Haven't looked up how to handle.
                     cfg_if! {
                         if #[cfg(any(feature = "f301", feature = "f373", feature = "f3x4"))] {
@@ -501,7 +501,7 @@ impl Clocks {
                     }
                 });
                 } else if #[cfg(feature = "f4")] {
-                    rcc.pllcfgr.modify(|_, w| unsafe {
+                    rcc.pllcfgr().modify(|_, w| unsafe {
                         w.pllsrc().bit(pll_src.bits() != 0);
                         w.plln().bits(self.plln);
                         w.pllm().bits(self.pllm);
@@ -513,15 +513,16 @@ impl Clocks {
             }
 
             #[cfg(feature = "f3")]
-            rcc.cfgr2.modify(|_, w| w.prediv().bits(self.prediv as u8));
+            rcc.cfgr2()
+                .modify(|_, w| unsafe { w.prediv().bits(self.prediv as u8) });
 
             // Now turn PLL back on, once we're configured things that can only be set with it off.
-            rcc.cr.modify(|_, w| w.pllon().on());
+            rcc.cr().modify(|_, w| w.pllon().on());
 
-            while rcc.cr.read().pllrdy().is_not_ready() {}
+            while rcc.cr().read().pllrdy().is_not_ready() {}
         }
 
-        rcc.cfgr.modify(|_, w| unsafe {
+        rcc.cfgr().modify(|_, w| unsafe {
             #[cfg(not(any(feature = "f301", feature = "f3x4", feature = "f4")))]
             w.usbpre().bit(self.usb_pre.bit()); // eg: Divide by 1.5: 72/1.5 = 48Mhz, required by USB clock.
 
@@ -531,7 +532,7 @@ impl Clocks {
             w.ppre1().bits(self.apb1_prescaler as u8) // HCLK division for APB1
         });
 
-        rcc.cr.modify(|_, w| w.csson().bit(self.security_system));
+        rcc.cr().modify(|_, w| w.csson().bit(self.security_system));
 
         // If we're not using the default clock source as input source or for PLL, turn it off.
         match self.input_src {
@@ -542,11 +543,11 @@ impl Clocks {
                 #[cfg(feature = "f4")]
                 PllSrc::Hsi => (),
                 _ => {
-                    rcc.cr.modify(|_, w| w.hsion().clear_bit());
+                    rcc.cr().modify(|_, w| w.hsion().clear_bit());
                 }
             },
             _ => {
-                rcc.cr.modify(|_, w| w.hsion().clear_bit());
+                rcc.cr().modify(|_, w| w.hsion().clear_bit());
             }
         }
 
@@ -567,25 +568,25 @@ impl Clocks {
         // todo: But this saves a few reg writes.
         match self.input_src {
             InputSrc::Hse(_) => {
-                rcc.cr.modify(|_, w| w.hseon().set_bit());
-                while rcc.cr.read().hserdy().is_not_ready() {}
+                rcc.cr().modify(|_, w| w.hseon().bit(true));
+                while rcc.cr().read().hserdy().is_not_ready() {}
 
-                rcc.cfgr
+                rcc.cfgr()
                     .modify(|_, w| unsafe { w.sw().bits(self.input_src.bits()) });
             }
             InputSrc::Pll(_) => {
                 // todo: DRY with above.
-                rcc.cr.modify(|_, w| w.hseon().set_bit());
-                while rcc.cr.read().hserdy().is_not_ready() {}
+                rcc.cr().modify(|_, w| w.hseon().bit(true));
+                while rcc.cr().read().hserdy().is_not_ready() {}
 
-                rcc.cr.modify(|_, w| w.pllon().off());
-                while rcc.cr.read().pllrdy().is_ready() {}
+                rcc.cr().modify(|_, w| w.pllon().off());
+                while rcc.cr().read().pllrdy().is_ready() {}
 
-                rcc.cfgr
+                rcc.cfgr()
                     .modify(|_, w| unsafe { w.sw().bits(self.input_src.bits()) });
 
-                rcc.cr.modify(|_, w| w.pllon().on());
-                while rcc.cr.read().pllrdy().is_not_ready() {}
+                rcc.cr().modify(|_, w| w.pllon().on());
+                while rcc.cr().read().pllrdy().is_not_ready() {}
             }
             InputSrc::Hsi => (), // Already reset to this.
         }
@@ -632,7 +633,7 @@ impl Clocks {
     ///```
     pub fn pll_is_enabled(&self) -> bool {
         let rcc = unsafe { &(*RCC::ptr()) };
-        rcc.cr.read().pllon().bit_is_set()
+        rcc.cr().read().pllon().bit_is_set()
     }
 
     pub fn hclk(&self) -> u32 {

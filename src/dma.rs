@@ -19,18 +19,16 @@ use core::{
 };
 
 use crate::{
-    MAX_ITERS,
     pac::{self, RCC},
     util::rcc_en_reset,
 };
 
 cfg_if! {
-    if #[cfg(all(feature = "g0", not(any(feature = "g0b1", feature = "g0c1"))))] {
-        use crate::pac::{dma as dma1, DMA as DMA1};
-    } else if #[cfg(feature = "f3x4")] {
+    if #[cfg(any(feature = "f3x4", feature = "f301", feature = "g0"))] {
         use crate::pac::{dma1, DMA1};
-    }
-    else {
+    } else if #[cfg(any(feature = "h5", feature = "c0"))] {
+        use crate::pac::{dma as dma1, DMA as DMA1};
+    } else {
         use crate::pac::{dma1, dma2, DMA1, DMA2};
     }
 }
@@ -51,11 +49,7 @@ use paste::paste;
 #[derive(Clone, Copy)]
 pub enum DmaPeriph {
     Dma1,
-    #[cfg(not(any(
-        feature = "f3x4",
-        all(feature = "g0", not(any(feature = "g0b1", feature = "g0c1"))),
-        feature = "wb",
-    )))] // todo: f3x4 too
+    #[cfg(dma2)]
     Dma2,
 }
 
@@ -563,12 +557,15 @@ pub enum DmaChannel {
     C1 = 1,
     C2 = 2,
     C3 = 3,
+    #[cfg(not(any(feature = "c011", feature = "c031")))]
     C4 = 4,
+    #[cfg(not(any(feature = "c011", feature = "c031")))]
     C5 = 5,
     // todo: Some G0 variants have channels 6 and 7 and DMA1. (And up to 5 channels on DMA2)
-    #[cfg(not(feature = "g0"))]
+    //todo: Same for C0: Some variants have these channels.
+    #[cfg(not(any(feature = "g0", feature = "c0")))]
     C6 = 6,
-    #[cfg(not(feature = "g0"))]
+    #[cfg(not(any(feature = "g0", feature = "c0")))]
     C7 = 7,
     // todo: Which else have 8? Also, note that some have diff amounts on dma1 vs 2.
     #[cfg(any(feature = "l5", feature = "g4"))]
@@ -577,7 +574,7 @@ pub enum DmaChannel {
 
 #[derive(Copy, Clone)]
 #[repr(u8)]
-/// Set in CCR.
+/// Set in ccr().
 /// Can only be set when channel is disabled.
 pub enum Direction {
     /// DIR = 0 defines typically a peripheral-to-memory transfer
@@ -589,7 +586,7 @@ pub enum Direction {
 
 #[derive(Copy, Clone, PartialEq)]
 #[repr(u8)]
-/// Set in CCR.
+/// Set in ccr().
 /// Can only be set when channel is disabled.
 pub enum Circular {
     Disabled = 0,
@@ -629,7 +626,7 @@ pub enum DmaInterrupt {
     FifoError,
 }
 
-/// Reduce DRY over channels when configuring a channel's CCR.
+/// Reduce DRY over channels when configuring a channel's ccr().
 /// We must use a macro here, since match arms balk at the incompatible
 /// types of `CCR1`, `CCR2` etc.
 #[cfg(not(feature = "h7"))]
@@ -637,17 +634,17 @@ macro_rules! set_ccr {
     ($ccr:expr, $priority:expr, $direction:expr, $circular:expr, $periph_incr:expr, $mem_incr:expr, $periph_size:expr, $mem_size:expr) => {
         // "The register fields/bits MEM2MEM, PL[1:0], MSIZE[1:0], PSIZE[1:0], MINC, PINC, and DIR
         // are read-only when EN = 1"
-        let originally_enabled = $ccr.read().en().bit_is_set();
+        let originally_enabled = $ccr().read().en().bit_is_set();
         if originally_enabled {
-            $ccr.modify(|_, w| w.en().clear_bit());
-            while $ccr.read().en().bit_is_set() {}
+            $ccr().modify(|_, w| w.en().clear_bit());
+            while $ccr().read().en().bit_is_set() {}
         }
 
         if let Circular::Enabled = $circular {
-            $ccr.modify(|_, w| w.mem2mem().clear_bit());
+            $ccr().modify(|_, w| w.mem2mem().clear_bit());
         }
 
-        $ccr.modify(|_, w| unsafe {
+        $ccr().modify(|_, w| unsafe {
             // – the channel priority
             w.pl().bits($priority as u8);
             // – the data transfer direction
@@ -663,14 +660,14 @@ macro_rules! set_ccr {
             w.psize().bits($periph_size as u8);
             w.msize().bits($mem_size as u8);
             // – the interrupt enable at half and/or full transfer and/or transfer error
-            w.tcie().set_bit();
+            w.tcie().bit(true);
             // (See `Step 5` above.)
-            w.en().set_bit()
+            w.en().bit(true)
         });
 
         if originally_enabled {
-            $ccr.modify(|_, w| w.en().set_bit());
-            while $ccr.read().en().bit_is_clear() {}
+            $ccr().modify(|_, w| w.en().bit(true));
+            while $ccr().read().en().bit_is_clear() {}
         }
     }
 }
@@ -680,21 +677,21 @@ macro_rules! set_ccr {
 macro_rules! enable_interrupt {
     ($ccr:expr, $interrupt_type:expr) => {
         // "It must not be written when the channel is enabled (EN = 1)."
-        let originally_enabled = $ccr.read().en().bit_is_set();
+        let originally_enabled = $ccr().read().en().bit_is_set();
         if originally_enabled {
-            $ccr.modify(|_, w| w.en().clear_bit());
-            while $ccr.read().en().bit_is_set() {}
+            $ccr().modify(|_, w| w.en().clear_bit());
+            while $ccr().read().en().bit_is_set() {}
         }
 
-        $ccr.modify(|_, w| match $interrupt_type {
-            DmaInterrupt::TransferError => w.teie().set_bit(),
-            DmaInterrupt::HalfTransfer => w.htie().set_bit(),
-            DmaInterrupt::TransferComplete => w.tcie().set_bit(),
+        $ccr().modify(|_, w| match $interrupt_type {
+            DmaInterrupt::TransferError => w.teie().bit(true),
+            DmaInterrupt::HalfTransfer => w.htie().bit(true),
+            DmaInterrupt::TransferComplete => w.tcie().bit(true),
         });
 
         if originally_enabled {
-            $ccr.modify(|_, w| w.en().set_bit());
-            while $ccr.read().en().bit_is_clear() {}
+            $ccr().modify(|_, w| w.en().bit(true));
+            while $ccr().read().en().bit_is_clear() {}
         }
     };
 }
@@ -704,21 +701,21 @@ macro_rules! enable_interrupt {
 macro_rules! disable_interrupt {
     ($ccr:expr, $interrupt_type:expr) => {
         // "It must not be written when the channel is disabled (EN = 1)."
-        let originally_disabled = $ccr.read().en().bit_is_set();
+        let originally_disabled = $ccr().read().en().bit_is_set();
         if originally_disabled {
-            $ccr.modify(|_, w| w.en().clear_bit());
-            while $ccr.read().en().bit_is_set() {}
+            $ccr().modify(|_, w| w.en().clear_bit());
+            while $ccr().read().en().bit_is_set() {}
         }
 
-        $ccr.modify(|_, w| match $interrupt_type {
+        $ccr().modify(|_, w| match $interrupt_type {
             DmaInterrupt::TransferError => w.teie().clear_bit(),
             DmaInterrupt::HalfTransfer => w.htie().clear_bit(),
             DmaInterrupt::TransferComplete => w.tcie().clear_bit(),
         });
 
         if originally_disabled {
-            $ccr.modify(|_, w| w.en().set_bit());
-            while $ccr.read().en().bit_is_clear() {}
+            $ccr().modify(|_, w| w.en().bit(true));
+            while $ccr().read().en().bit_is_clear() {}
         }
     };
 }
@@ -770,8 +767,8 @@ where
         let rcc = unsafe { &(*RCC::ptr()) };
         cfg_if! {
             if #[cfg(feature = "f3")] {
-                rcc.ahbenr.modify(|_, w| w.dma1en().set_bit()); // no dmarst on F3.
-            } else if #[cfg(feature = "g0")] {
+                rcc.ahbenr().modify(|_, w| w.dma1en().bit(true)); // no dmarst on F3.
+            } else if #[cfg(any(feature = "g031", feature = "g041", feature = "g051", feature = "g061", feature = "g071", feature = "g081"))] {
                 rcc_en_reset!(ahb1, dma, rcc);
             } else {
                 rcc_en_reset!(ahb1, dma1, rcc);
@@ -781,34 +778,34 @@ where
         Self { regs }
     }
 
-    #[cfg(not(feature = "h7"))] // due to num_data size diff
-    /// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
-    /// interrupt. Note that this fn has been (perhaps) depreciated by the standalone fn.
-    pub fn cfg_channel(
-        &mut self,
-        channel: DmaChannel,
-        periph_addr: u32,
-        mem_addr: u32,
-        num_data: u16,
-        direction: Direction,
-        periph_size: DataSize,
-        mem_size: DataSize,
-        cfg: ChannelCfg,
-    ) {
-        cfg_channel(
-            &mut self.regs,
-            channel,
-            periph_addr,
-            mem_addr,
-            num_data,
-            direction,
-            periph_size,
-            mem_size,
-            cfg,
-        )
-    }
+    // #[cfg(not(feature = "h7"))] // due to num_data size diff
+    // /// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
+    // /// interrupt. Note that this fn has been (perhaps) depreciated by the standalone fn.
+    // pub fn cfg_channel(
+    //     &mut self,
+    //     channel: DmaChannel,
+    //     periph_addr: u32,
+    //     mem_addr: u32,
+    //     num_data: u16,
+    //     direction: Direction,
+    //     periph_size: DataSize,
+    //     mem_size: DataSize,
+    //     cfg: ChannelCfg,
+    // ) {
+    //     cfg_channel(
+    //         &mut self.regs,
+    //         channel,
+    //         periph_addr,
+    //         mem_addr,
+    //         num_data,
+    //         direction,
+    //         periph_size,
+    //         mem_size,
+    //         cfg,
+    //     )
+    // }
 
-    #[cfg(feature = "h7")]
+    // #[cfg(feature = "h7")]
     /// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
     /// interrupt. Note that this fn has been (perhaps) depreciated by the standalone fn.
     pub fn cfg_channel(
@@ -851,18 +848,20 @@ where
     }
 
     // todo: G0 removed from this fn due to a bug introduced in PAC 0.13
-    #[cfg(not(any(feature = "h7", feature = "g0")))]
+    #[cfg(not(any(feature = "h7")))]
     pub fn transfer_is_complete(&mut self, channel: DmaChannel) -> bool {
-        let isr_val = self.regs.isr.read();
+        let isr_val = self.regs.isr().read();
         match channel {
             DmaChannel::C1 => isr_val.tcif1().bit_is_set(),
             DmaChannel::C2 => isr_val.tcif2().bit_is_set(),
             DmaChannel::C3 => isr_val.tcif3().bit_is_set(),
+            #[cfg(not(any(feature = "c011", feature = "c031")))]
             DmaChannel::C4 => isr_val.tcif4().bit_is_set(),
+            #[cfg(not(any(feature = "c011", feature = "c031")))]
             DmaChannel::C5 => isr_val.tcif5().bit_is_set(),
-            #[cfg(not(feature = "g0"))]
+            #[cfg(not(any(feature = "g0", feature = "c0")))]
             DmaChannel::C6 => isr_val.tcif6().bit_is_set(),
-            #[cfg(not(feature = "g0"))]
+            #[cfg(not(any(feature = "g0", feature = "c0")))]
             DmaChannel::C7 => isr_val.tcif7().bit_is_set(),
             #[cfg(any(feature = "l5", feature = "g4"))]
             DmaChannel::C8 => isr_val.tcif8().bit_is_set(),
@@ -872,14 +871,14 @@ where
     #[cfg(feature = "h7")]
     pub fn transfer_is_complete(&mut self, channel: DmaChannel) -> bool {
         match channel {
-            DmaChannel::C0 => self.regs.lisr.read().tcif0().bit_is_set(),
-            DmaChannel::C1 => self.regs.lisr.read().tcif1().bit_is_set(),
-            DmaChannel::C2 => self.regs.lisr.read().tcif2().bit_is_set(),
-            DmaChannel::C3 => self.regs.lisr.read().tcif3().bit_is_set(),
-            DmaChannel::C4 => self.regs.hisr.read().tcif4().bit_is_set(),
-            DmaChannel::C5 => self.regs.hisr.read().tcif5().bit_is_set(),
-            DmaChannel::C6 => self.regs.hisr.read().tcif6().bit_is_set(),
-            DmaChannel::C7 => self.regs.hisr.read().tcif7().bit_is_set(),
+            DmaChannel::C0 => self.regs.lisr().read().tcif0().bit_is_set(),
+            DmaChannel::C1 => self.regs.lisr().read().tcif1().bit_is_set(),
+            DmaChannel::C2 => self.regs.lisr().read().tcif2().bit_is_set(),
+            DmaChannel::C3 => self.regs.lisr().read().tcif3().bit_is_set(),
+            DmaChannel::C4 => self.regs.hisr().read().tcif4().bit_is_set(),
+            DmaChannel::C5 => self.regs.hisr().read().tcif5().bit_is_set(),
+            DmaChannel::C6 => self.regs.hisr().read().tcif6().bit_is_set(),
+            DmaChannel::C7 => self.regs.hisr().read().tcif7().bit_is_set(),
         }
     }
 
@@ -890,11 +889,14 @@ where
 
     /// Disable a specific type of interrupt.
     /// todo: Non-H7 version too!
-    #[cfg(feature = "h7")]
+    // #[cfg(feature = "h7")]
     pub fn disable_interrupt(&mut self, channel: DmaChannel, interrupt: DmaInterrupt) {
         // Can only be set when the channel is disabled.
         // todo: Is this true for disabling interrupts true, re the channel must be disabled?
-        let cr = &self.regs.st[channel as usize].cr;
+        #[cfg(feature = "h7")]
+        let cr = &self.regs.st(channel as usize).cr();
+        #[cfg(not(feature = "h7"))]
+        let cr = &self.regs.ch(channel as usize).cr();
 
         let originally_enabled = cr.read().en().bit_is_set();
 
@@ -907,14 +909,18 @@ where
             DmaInterrupt::TransferError => cr.modify(|_, w| w.teie().clear_bit()),
             DmaInterrupt::HalfTransfer => cr.modify(|_, w| w.htie().clear_bit()),
             DmaInterrupt::TransferComplete => cr.modify(|_, w| w.tcie().clear_bit()),
+            #[cfg(feature = "h7")]
             DmaInterrupt::DirectModeError => cr.modify(|_, w| w.dmeie().clear_bit()),
-            DmaInterrupt::FifoError => self.regs.st[channel as usize]
-                .fcr
+            #[cfg(feature = "h7")]
+            DmaInterrupt::FifoError => self
+                .regs
+                .st(channel as usize)
+                .fcr()
                 .modify(|_, w| w.feie().clear_bit()),
-        }
+        };
 
         if originally_enabled {
-            cr.modify(|_, w| w.en().set_bit());
+            cr.modify(|_, w| w.en().bit(true));
             while cr.read().en().bit_is_clear() {}
         }
     }
@@ -922,446 +928,7 @@ where
 
 /// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
 /// interrupt. This is the function called by various module `read_dma` and `write_dma` functions.
-#[cfg(not(feature = "h7"))]
-pub fn cfg_channel<D>(
-    regs: &mut D,
-    channel: DmaChannel,
-    periph_addr: u32,
-    mem_addr: u32,
-    num_data: u16,
-    direction: Direction,
-    periph_size: DataSize,
-    mem_size: DataSize,
-    cfg: ChannelCfg,
-) where
-    D: Deref<Target = dma1::RegisterBlock>,
-{
-    // See the comments in the H7 variant for a description of what's going on.
-
-    unsafe {
-        match channel {
-            DmaChannel::C1 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cpar = &regs.ch1.par;
-                    } else {
-                        let cpar = &regs.cpar1;
-                    }
-                }
-                cpar.write(|w| w.bits(periph_addr));
-            }
-            DmaChannel::C2 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cpar = &regs.ch2.par;
-                    } else {
-                        let cpar = &regs.cpar2;
-                    }
-                }
-                cpar.write(|w| w.bits(periph_addr));
-            }
-            DmaChannel::C3 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cpar = &regs.ch3.par;
-                    } else {
-                        let cpar = &regs.cpar3;
-                    }
-                }
-                cpar.write(|w| w.bits(periph_addr));
-            }
-            DmaChannel::C4 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cpar = &regs.ch4.par;
-                    } else {
-                        let cpar = &regs.cpar4;
-                    }
-                }
-                cpar.write(|w| w.bits(periph_addr));
-            }
-            DmaChannel::C5 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cpar = &regs.ch5.par;
-                    } else {
-                        let cpar = &regs.cpar5;
-                    }
-                }
-                cpar.write(|w| w.bits(periph_addr));
-            }
-            #[cfg(not(feature = "g0"))]
-            DmaChannel::C6 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cpar = &regs.ch6.par;
-                    } else {
-                        let cpar = &regs.cpar6;
-                    }
-                }
-                cpar.write(|w| w.bits(periph_addr));
-            }
-            #[cfg(not(feature = "g0"))]
-            DmaChannel::C7 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cpar = &regs.ch7.par;
-                    } else {
-                        let cpar = &regs.cpar7;
-                    }
-                }
-                cpar.write(|w| w.bits(periph_addr));
-            }
-            #[cfg(any(feature = "l5", feature = "g4"))]
-            DmaChannel::C8 => {
-                let cpar = &regs.cpar8;
-                cpar.write(|w| w.bits(periph_addr));
-            }
-        }
-    }
-
-    atomic::compiler_fence(Ordering::SeqCst);
-    unsafe {
-        match channel {
-            DmaChannel::C1 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cmar = &regs.ch1.mar;
-                    } else if #[cfg(feature = "l5")] {
-                        let cmar = &regs.cm0ar1;
-                    } else {
-                        let cmar = &regs.cmar1;
-                    }
-                }
-                cmar.write(|w| w.bits(mem_addr));
-            }
-            DmaChannel::C2 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cmar = &regs.ch2.mar;
-                    } else if #[cfg(feature = "l5")] {
-                        let cmar = &regs.cm0ar2;
-                    } else {
-                        let cmar = &regs.cmar2;
-                    }
-                }
-                cmar.write(|w| w.bits(mem_addr));
-            }
-            DmaChannel::C3 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cmar = &regs.ch3.mar;
-                    } else if #[cfg(feature = "l5")] {
-                        let cmar = &regs.cm0ar3;
-                    } else {
-                        let cmar = &regs.cmar3;
-                    }
-                }
-                cmar.write(|w| w.bits(mem_addr));
-            }
-            DmaChannel::C4 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cmar = &regs.ch4.mar;
-                    } else if #[cfg(feature = "l5")] {
-                        let cmar = &regs.cm0ar4;
-                    } else {
-                        let cmar = &regs.cmar4;
-                    }
-                }
-                cmar.write(|w| w.bits(mem_addr));
-            }
-            DmaChannel::C5 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cmar = &regs.ch5.mar;
-                    } else if #[cfg(feature = "l5")] {
-                        let cmar = &regs.cm0ar5;
-                    } else {
-                        let cmar = &regs.cmar5;
-                    }
-                }
-                cmar.write(|w| w.bits(mem_addr));
-            }
-            #[cfg(not(feature = "g0"))]
-            DmaChannel::C6 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cmar = &regs.ch6.mar;
-                    } else if #[cfg(feature = "l5")] {
-                        let cmar = &regs.cm0ar6;
-                    } else {
-                        let cmar = &regs.cmar6;
-                    }
-                }
-                cmar.write(|w| w.bits(mem_addr));
-            }
-            #[cfg(not(feature = "g0"))]
-            DmaChannel::C7 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cmar = &regs.ch7.mar;
-                    } else if #[cfg(feature = "l5")] {
-                        let cmar = &regs.cm0ar7;
-                    } else {
-                        let cmar = &regs.cmar7;
-                    }
-                }
-                cmar.write(|w| w.bits(mem_addr));
-            }
-            #[cfg(any(feature = "l5", feature = "g4"))]
-            DmaChannel::C8 => {
-                #[cfg(feature = "l5")]
-                let cmar = &regs.cm0ar8;
-                #[cfg(feature = "g4")]
-                let cmar = &regs.cmar8;
-                cmar.write(|w| w.bits(mem_addr));
-            }
-        }
-    }
-
-    #[cfg(any(feature = "l5", feature = "wl"))]
-    let num_data = num_data as u32;
-
-    #[cfg(not(feature = "l5"))] // todo: PAC ommission? ndt fields missing for diff ndt regs.
-    unsafe {
-        match channel {
-            DmaChannel::C1 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cndtr = &regs.ch1.ndtr;
-                    } else {
-                        let cndtr = &regs.cndtr1;
-                    }
-                }
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-            DmaChannel::C2 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cndtr = &regs.ch2.ndtr;
-                    } else {
-                        let cndtr = &regs.cndtr2;
-                    }
-                }
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-            DmaChannel::C3 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cndtr = &regs.ch3.ndtr;
-                    } else {
-                        let cndtr = &regs.cndtr3;
-                    }
-                }
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-            DmaChannel::C4 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cndtr = &regs.ch4.ndtr;
-                    } else {
-                        let cndtr = &regs.cndtr4;
-                    }
-                }
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-            DmaChannel::C5 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cndtr = &regs.ch5.ndtr;
-                    } else {
-                        let cndtr = &regs.cndtr5;
-                    }
-                }
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-            #[cfg(not(feature = "g0"))]
-            DmaChannel::C6 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cndtr = &regs.ch6.ndtr;
-                    } else {
-                        let cndtr = &regs.cndtr6;
-                    }
-                }
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-            #[cfg(not(feature = "g0"))]
-            DmaChannel::C7 => {
-                cfg_if! {
-                    if #[cfg(any(feature = "f3", feature = "g0"))] {
-                        let cndtr = &regs.ch7.ndtr;
-                    } else {
-                        let cndtr = &regs.cndtr7;
-                    }
-                }
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-            #[cfg(any(feature = "l5", feature = "g4"))]
-            DmaChannel::C8 => {
-                let cndtr = &regs.cndtr8;
-                cndtr.write(|w| w.ndt().bits(num_data));
-            }
-        }
-    }
-
-    match channel {
-        DmaChannel::C1 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch1.cr;
-                } else {
-                    let ccr = &regs.ccr1;
-                }
-            }
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-        DmaChannel::C2 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch2.cr;
-                } else {
-                    let ccr = &regs.ccr2;
-                }
-            }
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-        DmaChannel::C3 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch3.cr;
-                } else {
-                    let ccr = &regs.ccr3;
-                }
-            }
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-        DmaChannel::C4 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch4.cr;
-                } else {
-                    let ccr = &regs.ccr4;
-                }
-            }
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-        DmaChannel::C5 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch5.cr;
-                } else {
-                    let ccr = &regs.ccr5;
-                }
-            }
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C6 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch6.cr;
-                } else {
-                    let ccr = &regs.ccr6;
-                }
-            }
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C7 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch7.cr;
-                } else {
-                    let ccr = &regs.ccr7;
-                }
-            }
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-        #[cfg(any(feature = "l5", feature = "g4"))]
-        DmaChannel::C8 => {
-            let ccr = &regs.ccr8;
-            set_ccr!(
-                ccr,
-                cfg.priority,
-                direction,
-                cfg.circular,
-                cfg.periph_incr,
-                cfg.mem_incr,
-                periph_size,
-                mem_size
-            );
-        }
-    }
-}
-
-/// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
-/// interrupt. This is the function called by various module `read_dma` and `write_dma` functions.
-#[cfg(feature = "h7")]
+// #[cfg(feature = "h7")]
 pub fn cfg_channel<D>(
     regs: &mut D,
     channel: DmaChannel,
@@ -1375,38 +942,41 @@ pub fn cfg_channel<D>(
 ) where
     D: Deref<Target = dma1::RegisterBlock>,
 {
+    cfg_if! {
+        if #[cfg(feature = "h7")] {
+            let mut ch_r = regs.st(channel as usize);
+        } else {
+            let mut ch_r = regs.ch(channel as usize);
+        }
+    }
     // todo: The H7 sections are different, but we consolidated the comments. Figure out
     // todo what's different and fix it by following the steps
 
-    regs.st[channel as usize]
-        .cr
-        .modify(|_, w| w.en().clear_bit());
-    while regs.st[channel as usize].cr.read().en().bit_is_set() {}
+    ch_r.cr().modify(|_, w| w.en().clear_bit());
+    while ch_r.cr().read().en().bit_is_set() {}
 
     // H743 RM Section 15.3.19 The following sequence is needed to configure a DMA stream x:
     // 1. Set the peripheral register address in the DMA_CPARx register.
     // The data is moved from/to this address to/from the memory after the peripheral event,
     // or after the channel is enabled in memory-to-memory mode.
-    regs.st[channel as usize]
-        .par
-        .write(|w| unsafe { w.bits(periph_addr) });
+    ch_r.par().write(|w| unsafe { w.bits(periph_addr) });
 
     atomic::compiler_fence(Ordering::SeqCst);
 
     // 2. Set the memory address in the DMA_CMARx register.
     // The data is written to/read from the memory after the peripheral event or after the
     // channel is enabled in memory-to-memory mode.
-    regs.st[channel as usize]
-        .m0ar
-        .write(|w| unsafe { w.bits(mem_addr) });
+    #[cfg(any(feature = "h7", feature = "l5"))]
+    ch_r.m0ar().write(|w| unsafe { w.bits(mem_addr) });
+
+    #[cfg(not(any(feature = "h7", feature = "l5")))]
+    ch_r.mar().write(|w| unsafe { w.bits(mem_addr) });
 
     // todo: m1ar too, if in double-buffer mode.
 
     // 3. Configure the total number of data to transfer in the DMA_CNDTRx register.
     // After each data transfer, this value is decremented.
-    regs.st[channel as usize]
-        .ndtr
-        .write(|w| unsafe { w.bits(num_data) });
+    ch_r.ndtr().write(|w| unsafe { w.bits(num_data) });
 
     // 4. Configure the parameters listed below in the DMA_CCRx register:
     // (These are listed below by their corresponding reg write code)
@@ -1438,7 +1008,7 @@ pub fn cfg_channel<D>(
     // "We use Ordering::Release to prevent all preceding memory operations from being moved
     // after [starting DMA], which performs a volatile write."
 
-    let cr = &regs.st[channel as usize].cr;
+    let cr = &ch_r.cr();
 
     let originally_enabled = cr.read().en().bit_is_set();
     if originally_enabled {
@@ -1452,7 +1022,10 @@ pub fn cfg_channel<D>(
         // – the data transfer direction
         // This bit [DIR] must be set only in memory-to-peripheral and peripheral-to-memory modes.
         // 0: read from peripheral
+        #[cfg(feature = "h7")]
         w.dir().bits(direction as u8);
+        #[cfg(not(feature = "h7"))]
+        w.dir().bit((direction as u8) != 0);
         // – the circular mode
         w.circ().bit(cfg.circular as u8 != 0);
         // – the peripheral and memory incremented mode
@@ -1462,134 +1035,19 @@ pub fn cfg_channel<D>(
         w.psize().bits(periph_size as u8);
         w.msize().bits(mem_size as u8);
         // – the interrupt enable at half and/or full transfer and/or transfer error
-        w.tcie().set_bit();
+        w.tcie().bit(true);
         // (See `Step 5` above.)
-        w.en().set_bit()
+        w.en().bit(true)
     });
 
     if originally_enabled {
-        cr.modify(|_, w| w.en().set_bit());
+        cr.modify(|_, w| w.en().bit(true));
         while cr.read().en().bit_is_clear() {}
     }
 }
 
 /// Stop a DMA transfer, if in progress.
-#[cfg(not(feature = "h7"))]
-fn stop_internal<D>(regs: &mut D, channel: DmaChannel)
-where
-    D: Deref<Target = dma1::RegisterBlock>,
-{
-    // L4 RM:
-    // Once the software activates a channel, it waits for the completion of the programmed
-    // transfer. The DMA controller is not able to resume an aborted active channel with a possible
-    // suspended bus transfer.
-    // To correctly stop and disable a channel, the software clears the EN bit of the DMA_CCRx
-    // register.
-
-    match channel {
-        DmaChannel::C1 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch1.cr;
-                } else {
-                    let ccr = &regs.ccr1;
-                }
-            }
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-        DmaChannel::C2 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch2.cr;
-                } else {
-                    let ccr = &regs.ccr2;
-                }
-            }
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-        DmaChannel::C3 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch3.cr;
-                } else {
-                    let ccr = &regs.ccr3;
-                }
-            }
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-        DmaChannel::C4 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch4.cr;
-                } else {
-                    let ccr = &regs.ccr4;
-                }
-            }
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-        DmaChannel::C5 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch5.cr;
-                } else {
-                    let ccr = &regs.ccr5;
-                }
-            }
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C6 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch6.cr;
-                } else {
-                    let ccr = &regs.ccr6;
-                }
-            }
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C7 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch7.cr;
-                } else {
-                    let ccr = &regs.ccr7;
-                }
-            }
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-        #[cfg(any(feature = "l5", feature = "g4"))]
-        DmaChannel::C8 => {
-            let ccr = &regs.ccr8;
-            ccr.modify(|_, w| w.en().clear_bit());
-            while ccr.read().en().bit_is_set() {}
-        }
-    };
-
-    // The software secures that no pending request from the peripheral is served by the
-    // DMA controller before the transfer completion.
-    // todo?
-
-    // The software waits for the transfer complete or transfer error interrupt.
-    // (Handed by calling code)
-
-    // (todo: set ifcr.cficx bit to clear all interrupts?)
-
-    // When a channel transfer error occurs, the EN bit of the DMA_CCRx register is cleared by
-    // hardware. This EN bit can not be set again by software to re-activate the channel x, until the
-    // TEIFx bit of the DMA_ISR register is set
-}
-
-/// Stop a DMA transfer, if in progress.
-#[cfg(feature = "h7")]
+// #[cfg(feature = "h7")]
 fn stop_internal<D>(regs: &mut D, channel: DmaChannel)
 where
     D: Deref<Target = dma1::RegisterBlock>,
@@ -1605,14 +1063,18 @@ where
     // DMA controller before the transfer completion.
     // todo?
 
-    let cr = &regs.st[channel as usize].cr;
+    #[cfg(feature = "h7")]
+    let cr = &regs.st(channel as usize).cr();
+    #[cfg(not(feature = "h7"))]
+    let cr = &regs.ch(channel as usize).cr();
+
     cr.modify(|_, w| w.en().clear_bit());
     while cr.read().en().bit_is_set() {}
 
     // The software waits for the transfer complete or transfer error interrupt.
     // (Handed by calling code)
 
-    // (todo: set ifcr.cficx bit to clear all interrupts?)
+    // (todo: set ifcr().cficx bit to clear all interrupts?)
 
     // When a channel transfer error occurs, the EN bit of the DMA_CCRx register is cleared by
     // hardware. This EN bit can not be set again by software to re-activate the channel x, until the
@@ -1626,7 +1088,7 @@ pub fn stop(periph: DmaPeriph, channel: DmaChannel) {
             let mut regs = unsafe { &(*DMA1::ptr()) };
             stop_internal(&mut regs, channel);
         }
-        #[cfg(not(any(feature = "f3x4", feature = "g0", feature = "wb")))]
+        #[cfg(dma2)]
         DmaPeriph::Dma2 => {
             let mut regs = unsafe { &(*pac::DMA2::ptr()) };
             stop_internal(&mut regs, channel);
@@ -1640,373 +1102,207 @@ where
 {
     cfg_if! {
         if #[cfg(any(feature = "g4", feature = "wl"))] {
-            regs.ifcr.write(|w| match channel {
+            regs.ifcr().write(|w| match channel {
                 DmaChannel::C1 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif1().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif1().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif1().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif1().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif1().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif1().bit(true),
                 }
                 DmaChannel::C2 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif2().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif2().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif2().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif2().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif2().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif2().bit(true),
                 }
                 DmaChannel::C3 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif3().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif3().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif3().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif3().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif3().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif3().bit(true),
                 }
                 DmaChannel::C4 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif4().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif4().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif4().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif4().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif4().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif4().bit(true),
                 }
                 DmaChannel::C5 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif5().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif5().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif5().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif5().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif5().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif5().bit(true),
                 }
                 DmaChannel::C6 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif6().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif6().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif6().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif6().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif6().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif6().bit(true),
                 }
                 DmaChannel::C7 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif7().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif7().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif7().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif7().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif7().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif7().bit(true),
                 }
                 #[cfg(not(feature = "wl"))]
                 DmaChannel::C8 => match interrupt {
-                    DmaInterrupt::TransferError => w.teif8().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.htif8().set_bit(),
-                    DmaInterrupt::TransferComplete => w.tcif8().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif8().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif8().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif8().bit(true),
                 }
             });
         } else if #[cfg(feature = "h7")] {
             match channel {
                 DmaChannel::C0 => match interrupt {
-                    DmaInterrupt::TransferError => regs.lifcr.write(|w| w.cteif0().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.lifcr.write(|w| w.chtif0().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.lifcr.write(|w| w.ctcif0().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.lifcr.write(|w| w.cdmeif0().set_bit()),
-                    DmaInterrupt::FifoError => regs.lifcr.write(|w| w.cfeif0().set_bit()),
+                    DmaInterrupt::TransferError => regs.lifcr().write(|w| w.cteif0().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.lifcr().write(|w| w.chtif0().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.lifcr().write(|w| w.ctcif0().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.lifcr().write(|w| w.cdmeif0().bit(true)),
+                    DmaInterrupt::FifoError => regs.lifcr().write(|w| w.cfeif0().bit(true)),
                 }
                 DmaChannel::C1 => match interrupt {
-                    DmaInterrupt::TransferError => regs.lifcr.write(|w| w.cteif1().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.lifcr.write(|w| w.chtif1().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.lifcr.write(|w| w.ctcif1().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.lifcr.write(|w| w.cdmeif1().set_bit()),
-                    DmaInterrupt::FifoError => regs.lifcr.write(|w| w.cfeif1().set_bit()),
+                    DmaInterrupt::TransferError => regs.lifcr().write(|w| w.cteif1().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.lifcr().write(|w| w.chtif1().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.lifcr().write(|w| w.ctcif1().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.lifcr().write(|w| w.cdmeif1().bit(true)),
+                    DmaInterrupt::FifoError => regs.lifcr().write(|w| w.cfeif1().bit(true)),
                 }
                 DmaChannel::C2 => match interrupt {
-                    DmaInterrupt::TransferError => regs.lifcr.write(|w| w.cteif2().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.lifcr.write(|w| w.chtif2().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.lifcr.write(|w| w.ctcif2().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.lifcr.write(|w| w.cdmeif2().set_bit()),
-                    DmaInterrupt::FifoError => regs.lifcr.write(|w| w.cfeif2().set_bit()),
+                    DmaInterrupt::TransferError => regs.lifcr().write(|w| w.cteif2().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.lifcr().write(|w| w.chtif2().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.lifcr().write(|w| w.ctcif2().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.lifcr().write(|w| w.cdmeif2().bit(true)),
+                    DmaInterrupt::FifoError => regs.lifcr().write(|w| w.cfeif2().bit(true)),
                 }
                 DmaChannel::C3 => match interrupt {
-                    DmaInterrupt::TransferError => regs.lifcr.write(|w| w.cteif3().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.lifcr.write(|w| w.chtif3().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.lifcr.write(|w| w.ctcif3().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.lifcr.write(|w| w.cdmeif3().set_bit()),
-                    DmaInterrupt::FifoError => regs.lifcr.write(|w| w.cfeif3().set_bit()),
+                    DmaInterrupt::TransferError => regs.lifcr().write(|w| w.cteif3().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.lifcr().write(|w| w.chtif3().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.lifcr().write(|w| w.ctcif3().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.lifcr().write(|w| w.cdmeif3().bit(true)),
+                    DmaInterrupt::FifoError => regs.lifcr().write(|w| w.cfeif3().bit(true)),
                 }
                 DmaChannel::C4 => match interrupt {
-                    DmaInterrupt::TransferError => regs.hifcr.write(|w| w.cteif4().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.hifcr.write(|w| w.chtif4().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.hifcr.write(|w| w.ctcif4().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.hifcr.write(|w| w.cdmeif4().set_bit()),
-                    DmaInterrupt::FifoError => regs.hifcr.write(|w| w.cfeif4().set_bit()),
+                    DmaInterrupt::TransferError => regs.hifcr().write(|w| w.cteif4().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.hifcr().write(|w| w.chtif4().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.hifcr().write(|w| w.ctcif4().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.hifcr().write(|w| w.cdmeif4().bit(true)),
+                    DmaInterrupt::FifoError => regs.hifcr().write(|w| w.cfeif4().bit(true)),
                 }
                 DmaChannel::C5 => match interrupt {
-                    DmaInterrupt::TransferError => regs.hifcr.write(|w| w.cteif5().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.hifcr.write(|w| w.chtif5().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.hifcr.write(|w| w.ctcif5().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.hifcr.write(|w| w.cdmeif5().set_bit()),
-                    DmaInterrupt::FifoError => regs.hifcr.write(|w| w.cfeif5().set_bit()),
+                    DmaInterrupt::TransferError => regs.hifcr().write(|w| w.cteif5().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.hifcr().write(|w| w.chtif5().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.hifcr().write(|w| w.ctcif5().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.hifcr().write(|w| w.cdmeif5().bit(true)),
+                    DmaInterrupt::FifoError => regs.hifcr().write(|w| w.cfeif5().bit(true)),
                 }
                 DmaChannel::C6 => match interrupt {
-                    DmaInterrupt::TransferError => regs.hifcr.write(|w| w.cteif6().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.hifcr.write(|w| w.chtif6().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.hifcr.write(|w| w.ctcif6().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.hifcr.write(|w| w.cdmeif6().set_bit()),
-                    DmaInterrupt::FifoError => regs.hifcr.write(|w| w.cfeif6().set_bit()),
+                    DmaInterrupt::TransferError => regs.hifcr().write(|w| w.cteif6().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.hifcr().write(|w| w.chtif6().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.hifcr().write(|w| w.ctcif6().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.hifcr().write(|w| w.cdmeif6().bit(true)),
+                    DmaInterrupt::FifoError => regs.hifcr().write(|w| w.cfeif6().bit(true)),
                 }
                 DmaChannel::C7 => match interrupt {
-                    DmaInterrupt::TransferError => regs.hifcr.write(|w| w.cteif7().set_bit()),
-                    DmaInterrupt::HalfTransfer => regs.hifcr.write(|w| w.chtif7().set_bit()),
-                    DmaInterrupt::TransferComplete => regs.hifcr.write(|w| w.ctcif7().set_bit()),
-                    DmaInterrupt::DirectModeError => regs.hifcr.write(|w| w.cdmeif7().set_bit()),
-                    DmaInterrupt::FifoError => regs.hifcr.write(|w| w.cfeif7().set_bit()),
+                    DmaInterrupt::TransferError => regs.hifcr().write(|w| w.cteif7().bit(true)),
+                    DmaInterrupt::HalfTransfer => regs.hifcr().write(|w| w.chtif7().bit(true)),
+                    DmaInterrupt::TransferComplete => regs.hifcr().write(|w| w.ctcif7().bit(true)),
+                    DmaInterrupt::DirectModeError => regs.hifcr().write(|w| w.cdmeif7().bit(true)),
+                    DmaInterrupt::FifoError => regs.hifcr().write(|w| w.cfeif7().bit(true)),
                 }
-            }
+            };
             // todo: G0 PAC 0.14 had a reversion where these flags used to work, but now don't.
         } else if #[cfg(not(feature = "g0"))] {
-            regs.ifcr.write(|w| match channel {
+            regs.ifcr().write(|w| match channel {
                 DmaChannel::C1 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif1().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif1().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif1().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif1().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif1().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif1().bit(true),
                 }
                 DmaChannel::C2 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif2().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif2().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif2().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif2().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif2().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif2().bit(true),
                 }
                 DmaChannel::C3 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif3().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif3().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif3().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif3().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif3().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif3().bit(true),
                 }
+                #[cfg(not(any(feature = "c011", feature = "c031")))]
                 DmaChannel::C4 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif4().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif4().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif4().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif4().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif4().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif4().bit(true),
                 }
+                #[cfg(not(any(feature = "c011", feature = "c031")))]
                 DmaChannel::C5 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif5().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif5().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif5().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif5().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif5().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif5().bit(true),
                 }
-                #[cfg(not(feature = "g0"))]
+                #[cfg(not(any(feature = "g0", feature = "c0")))]
                 DmaChannel::C6 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif6().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif6().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif6().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif6().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif6().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif6().bit(true),
                 }
-                #[cfg(not(feature = "g0"))]
+                #[cfg(not(any(feature = "g0", feature = "c0")))]
                 DmaChannel::C7 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif7().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif7().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif7().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif7().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif7().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif7().bit(true),
                 }
                 #[cfg(any(feature = "l5", feature = "g4"))]
                 DmaChannel::C8 => match interrupt {
-                    DmaInterrupt::TransferError => w.cteif8().set_bit(),
-                    DmaInterrupt::HalfTransfer => w.chtif8().set_bit(),
-                    DmaInterrupt::TransferComplete => w.ctcif8().set_bit(),
+                    DmaInterrupt::TransferError => w.cteif8().bit(true),
+                    DmaInterrupt::HalfTransfer => w.chtif8().bit(true),
+                    DmaInterrupt::TransferComplete => w.ctcif8().bit(true),
                 }
             });
         }
     }
 }
 
-/// Enable an interrupt.
-#[cfg(not(feature = "h7"))]
 fn enable_interrupt_internal<D>(regs: &mut D, channel: DmaChannel, interrupt: DmaInterrupt)
 where
     D: Deref<Target = dma1::RegisterBlock>,
 {
     // Can only be set when the channel is disabled.
-    match channel {
-        DmaChannel::C1 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch1.cr;
-                } else {
-                    let ccr = &regs.ccr1;
-                }
-            }
-            enable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C2 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch2.cr;
-                } else {
-                    let ccr = &regs.ccr2;
-                }
-            }
-            enable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C3 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch3.cr;
-                } else {
-                    let ccr = &regs.ccr3;
-                }
-            }
-            enable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C4 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch4.cr;
-                } else {
-                    let ccr = &regs.ccr4;
-                }
-            }
-            enable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C5 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch5.cr;
-                } else {
-                    let ccr = &regs.ccr5;
-                }
-            }
-            enable_interrupt!(ccr, interrupt);
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C6 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch6.cr;
-                } else {
-                    let ccr = &regs.ccr6;
-                }
-            }
-            enable_interrupt!(ccr, interrupt);
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C7 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch7.cr;
-                } else {
-                    let ccr = &regs.ccr7;
-                }
-            }
-            enable_interrupt!(ccr, interrupt);
-        }
-        #[cfg(any(feature = "l5", feature = "g4"))]
-        DmaChannel::C8 => {
-            let ccr = &regs.ccr8;
-            enable_interrupt!(ccr, interrupt);
-        }
-    };
-}
-
-/// Disable an interrupt.
-#[cfg(not(feature = "h7"))]
-fn disable_interrupt_internal<D>(regs: &mut D, channel: DmaChannel, interrupt: DmaInterrupt)
-where
-    D: Deref<Target = dma1::RegisterBlock>,
-{
-    // Can only be set when the channel is disabled.
-    match channel {
-        DmaChannel::C1 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch1.cr;
-                } else {
-                    let ccr = &regs.ccr1;
-                }
-            }
-            disable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C2 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch2.cr;
-                } else {
-                    let ccr = &regs.ccr2;
-                }
-            }
-            disable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C3 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch3.cr;
-                } else {
-                    let ccr = &regs.ccr3;
-                }
-            }
-            disable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C4 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch4.cr;
-                } else {
-                    let ccr = &regs.ccr4;
-                }
-            }
-            disable_interrupt!(ccr, interrupt);
-        }
-        DmaChannel::C5 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch5.cr;
-                } else {
-                    let ccr = &regs.ccr5;
-                }
-            }
-            disable_interrupt!(ccr, interrupt);
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C6 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch6.cr;
-                } else {
-                    let ccr = &regs.ccr6;
-                }
-            }
-            disable_interrupt!(ccr, interrupt);
-        }
-        #[cfg(not(feature = "g0"))]
-        DmaChannel::C7 => {
-            cfg_if! {
-                if #[cfg(any(feature = "f3", feature = "g0"))] {
-                    let ccr = &regs.ch7.cr;
-                } else {
-                    let ccr = &regs.ccr7;
-                }
-            }
-            disable_interrupt!(ccr, interrupt);
-        }
-        #[cfg(any(feature = "l5", feature = "g4"))]
-        DmaChannel::C8 => {
-            let ccr = &regs.ccr8;
-            disable_interrupt!(ccr, interrupt);
-        }
-    };
-}
-
-#[cfg(feature = "h7")]
-fn enable_interrupt_internal<D>(regs: &mut D, channel: DmaChannel, interrupt: DmaInterrupt)
-where
-    D: Deref<Target = dma1::RegisterBlock>,
-{
-    // Can only be set when the channel is disabled.
-    let cr = &regs.st[channel as usize].cr;
+    #[cfg(feature = "h7")]
+    let cr = &regs.st(channel as usize).cr();
+    #[cfg(not(feature = "h7"))]
+    let cr = &regs.ch(channel as usize).cr();
 
     match interrupt {
-        DmaInterrupt::TransferError => cr.modify(|_, w| w.teie().set_bit()),
-        DmaInterrupt::HalfTransfer => cr.modify(|_, w| w.htie().set_bit()),
-        DmaInterrupt::TransferComplete => cr.modify(|_, w| w.tcie().set_bit()),
-        DmaInterrupt::DirectModeError => cr.modify(|_, w| w.dmeie().set_bit()),
-        DmaInterrupt::FifoError => regs.st[channel as usize]
-            .fcr
-            .modify(|_, w| w.feie().set_bit()),
-    }
+        DmaInterrupt::TransferError => cr.modify(|_, w| w.teie().bit(true)),
+        DmaInterrupt::HalfTransfer => cr.modify(|_, w| w.htie().bit(true)),
+        DmaInterrupt::TransferComplete => cr.modify(|_, w| w.tcie().bit(true)),
+        #[cfg(feature = "h7")]
+        DmaInterrupt::DirectModeError => cr.modify(|_, w| w.dmeie().bit(true)),
+        #[cfg(feature = "h7")]
+        DmaInterrupt::FifoError => regs
+            .st(channel as usize)
+            .fcr()
+            .modify(|_, w| w.feie().bit(true)),
+    };
 }
 
-#[cfg(feature = "h7")]
 fn disable_interrupt_internal<D>(regs: &mut D, channel: DmaChannel, interrupt: DmaInterrupt)
 where
     D: Deref<Target = dma1::RegisterBlock>,
 {
     // Can only be set when the channel is disabled.
-    let cr = &regs.st[channel as usize].cr;
-
-    // todo DRY
+    #[cfg(feature = "h7")]
+    let cr = &regs.st(channel as usize).cr();
+    #[cfg(not(feature = "h7"))]
+    let cr = &regs.ch(channel as usize).cr();
 
     match interrupt {
         DmaInterrupt::TransferError => cr.modify(|_, w| w.teie().clear_bit()),
         DmaInterrupt::HalfTransfer => cr.modify(|_, w| w.htie().clear_bit()),
         DmaInterrupt::TransferComplete => cr.modify(|_, w| w.tcie().clear_bit()),
+        #[cfg(feature = "h7")]
         DmaInterrupt::DirectModeError => cr.modify(|_, w| w.dmeie().clear_bit()),
-        DmaInterrupt::FifoError => regs.st[channel as usize]
-            .fcr
+        #[cfg(feature = "h7")]
+        DmaInterrupt::FifoError => regs
+            .st(channel as usize)
+            .fcr()
             .modify(|_, w| w.feie().clear_bit()),
-    }
+    };
 }
 
 /// Enable a specific type of interrupt.
@@ -2016,7 +1312,7 @@ pub fn enable_interrupt(periph: DmaPeriph, channel: DmaChannel, interrupt: DmaIn
             let mut regs = unsafe { &(*DMA1::ptr()) };
             enable_interrupt_internal(&mut regs, channel, interrupt);
         }
-        #[cfg(not(any(feature = "f3x4", feature = "g0", feature = "wb")))]
+        #[cfg(dma2)]
         DmaPeriph::Dma2 => {
             let mut regs = unsafe { &(*pac::DMA2::ptr()) };
             enable_interrupt_internal(&mut regs, channel, interrupt);
@@ -2031,7 +1327,7 @@ pub fn disable_interrupt(periph: DmaPeriph, channel: DmaChannel, interrupt: DmaI
             let mut regs = unsafe { &(*DMA1::ptr()) };
             disable_interrupt_internal(&mut regs, channel, interrupt);
         }
-        #[cfg(not(any(feature = "f3x4", feature = "g0", feature = "wb")))]
+        #[cfg(dma2)]
         DmaPeriph::Dma2 => {
             let mut regs = unsafe { &(*pac::DMA2::ptr()) };
             disable_interrupt_internal(&mut regs, channel, interrupt);
@@ -2046,7 +1342,7 @@ pub fn clear_interrupt(periph: DmaPeriph, channel: DmaChannel, interrupt: DmaInt
             let mut regs = unsafe { &(*DMA1::ptr()) };
             clear_interrupt_internal(&mut regs, channel, interrupt);
         }
-        #[cfg(not(any(feature = "f3x4", feature = "g0", feature = "wb")))]
+        #[cfg(dma2)]
         DmaPeriph::Dma2 => {
             let mut regs = unsafe { &(*pac::DMA2::ptr()) };
             clear_interrupt_internal(&mut regs, channel, interrupt);
@@ -2099,54 +1395,53 @@ pub fn mux(periph: DmaPeriph, channel: DmaChannel, input: DmaInput) {
         #[cfg(feature = "g4")]
         let rcc = unsafe { &(*RCC::ptr()) };
         #[cfg(feature = "g4")]
-        rcc.ahb1enr.modify(|_, w| w.dmamuxen().set_bit());
+        rcc.ahb1enr().modify(|_, w| w.dmamux1en().bit(true));
 
         match periph {
             DmaPeriph::Dma1 => {
-                #[cfg(not(feature = "h7"))]
-                match channel {
-                    // Note the offset by 1, due to mismatch in DMA channels starting at 1, and DMAMUX
-                    // channels starting at 0. Ops tested this is correct on G4.
-                    DmaChannel::C1 => mux.c0cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C2 => mux.c1cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C3 => mux.c2cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C4 => mux.c3cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C5 => mux.c4cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    #[cfg(not(feature = "g0"))]
-                    DmaChannel::C6 => mux.c5cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    #[cfg(not(feature = "g0"))]
-                    DmaChannel::C7 => mux.c6cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    #[cfg(any(feature = "l5", feature = "g4"))]
-                    DmaChannel::C8 => mux.c7cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                }
-
-                #[cfg(feature = "h7")]
-                mux.ccr[channel as usize].modify(|_, w| w.dmareq_id().bits(input as u8));
+                // #[cfg(not(feature = "h7"))]
+                // match channel {
+                //     // Note the offset by 1, due to mismatch in DMA channels starting at 1, and DMAMUX
+                //     // channels starting at 0. Ops tested this is correct on G4.
+                //     DmaChannel::C1 => mux.c0cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C2 => mux.c1cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C3 => mux.c2cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C4 => mux.c3cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C5 => mux.c4cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     #[cfg(not(feature = "g0"))]
+                //     DmaChannel::C6 => mux.c5cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     #[cfg(not(feature = "g0"))]
+                //     DmaChannel::C7 => mux.c6cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     #[cfg(any(feature = "l5", feature = "g4"))]
+                //     DmaChannel::C8 => mux.c7cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                // }
+                //
+                // #[cfg(feature = "h7")]
+                mux.ccr(channel as usize)
+                    .modify(|_, w| w.dmareq_id().bits(input as u8));
             }
-            #[cfg(not(any(
-                all(feature = "g0", not(any(feature = "g0b1", feature = "g0c1"))),
-                feature = "wb"
-            )))]
+            #[cfg(dma2)]
             DmaPeriph::Dma2 => {
-                #[cfg(not(feature = "h7"))]
-                match channel {
-                    DmaChannel::C1 => mux.c8cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C2 => mux.c9cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C3 => mux.c10cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C4 => mux.c11cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    DmaChannel::C5 => mux.c12cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    #[cfg(not(feature = "g0"))]
-                    DmaChannel::C6 => mux.c13cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    #[cfg(not(any(feature = "g0", feature = "wb", feature = "wl")))]
-                    DmaChannel::C7 => mux.c14cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                    #[cfg(any(feature = "wb", feature = "wl"))]
-                    DmaChannel::C7 => (), // Maybe no channel 7 on DMA2 on these platforms.
-                    #[cfg(any(feature = "l5", feature = "g4"))]
-                    DmaChannel::C8 => mux.c15cr.modify(|_, w| w.dmareq_id().bits(input as u8)),
-                }
-
-                #[cfg(feature = "h7")]
-                mux.ccr[channel as usize + 8].modify(|_, w| w.dmareq_id().bits(input as u8));
+                // #[cfg(not(feature = "h7"))]
+                // match channel {
+                //     DmaChannel::C1 => mux.c8cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C2 => mux.c9cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C3 => mux.c10cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C4 => mux.c11cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     DmaChannel::C5 => mux.c12cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     #[cfg(not(feature = "g0"))]
+                //     DmaChannel::C6 => mux.c13cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     #[cfg(not(any(feature = "g0", feature = "wb", feature = "wl")))]
+                //     DmaChannel::C7 => mux.c14cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                //     #[cfg(any(feature = "wb", feature = "wl"))]
+                //     DmaChannel::C7 => (), // Maybe no channel 7 on DMA2 on these platforms.
+                //     #[cfg(any(feature = "l5", feature = "g4"))]
+                //     DmaChannel::C8 => mux.c15cr().modify(|_, w| w.dmareq_id().bits(input as u8)),
+                // }
+                //
+                // #[cfg(feature = "h7")]
+                mux.ccr(channel as usize + 8)
+                    .modify(|_, w| w.dmareq_id().bits(input as u8));
             }
         }
     }
@@ -2155,7 +1450,8 @@ pub fn mux(periph: DmaPeriph, channel: DmaChannel, input: DmaInput) {
 #[cfg(feature = "h7")]
 /// Configure a specific DMA channel to work with a specific peripheral, on DMAMUX2.
 pub fn mux2(periph: DmaPeriph, channel: DmaChannel, input: DmaInput2, mux: &mut DMAMUX2) {
-    mux.ccr[channel as usize].modify(|_, w| unsafe { w.dmareq_id().bits(input as u8) });
+    mux.ccr(channel as usize)
+        .modify(|_, w| unsafe { w.dmareq_id().bits(input as u8) });
 }
 
 // todo: Enable this for other MCUs as requried
@@ -2168,9 +1464,9 @@ pub fn enable_mux1() {
     cfg_if! {
         if #[cfg(feature = "g4")] {
             // Note inconsistency between `dmamux` and `dmamux`; can't use macro here.
-            rcc.ahb1enr.modify(|_, w| w.dmamuxen().set_bit());
-            rcc.ahb1rstr.modify(|_, w| w.dmamux1rst().set_bit());
-            rcc.ahb1rstr.modify(|_, w| w.dmamux1rst().clear_bit());
+            rcc.ahb1enr().modify(|_, w| w.dmamux1en().bit(true));
+            rcc.ahb1rstr().modify(|_, w| w.dmamux1rst().bit(true));
+            rcc.ahb1rstr().modify(|_, w| w.dmamux1rst().clear_bit());
         } else {
             rcc_en_reset!(ahb1, dmamux, rcc);
         }
@@ -2186,15 +1482,18 @@ where
 {
     // todo: Allow selecting channels in pairs to save a write.
     let val = input.dma1_channel_select();
-    regs.cselr.modify(|_, w| match input.dma1_channel() {
-        DmaChannel::C1 => w.c1s().bits(val),
-        DmaChannel::C2 => w.c2s().bits(val),
-        DmaChannel::C3 => w.c3s().bits(val),
-        DmaChannel::C4 => w.c4s().bits(val),
-        DmaChannel::C5 => w.c5s().bits(val),
-        DmaChannel::C6 => w.c6s().bits(val),
-        DmaChannel::C7 => w.c7s().bits(val),
-    });
+
+    unsafe {
+        regs.cselr().modify(|_, w| match input.dma1_channel() {
+            DmaChannel::C1 => w.c1s().bits(val),
+            DmaChannel::C2 => w.c2s().bits(val),
+            DmaChannel::C3 => w.c3s().bits(val),
+            DmaChannel::C4 => w.c4s().bits(val),
+            DmaChannel::C5 => w.c5s().bits(val),
+            DmaChannel::C6 => w.c6s().bits(val),
+            DmaChannel::C7 => w.c7s().bits(val),
+        });
+    }
 }
 
 // todo: Code below is for experimental struct-per-channel API
@@ -2218,7 +1517,7 @@ macro_rules! make_chan_struct {
                     let rcc = unsafe { &(*RCC::ptr()) };
                     cfg_if! {
                         if #[cfg(feature = "f3")] {
-                            rcc.ahbenr.modify(|_, w| w.dma1en().set_bit()); // no dmarst on F3.
+                            rcc.ahbenr().modify(|_, w| w.dma1en().bit(true)); // no dmarst on F3.
                         } else if #[cfg(feature = "g0")] {
                             rcc_en_reset!(ahb1, dma, rcc);
                         } else {
@@ -2233,50 +1532,54 @@ macro_rules! make_chan_struct {
                     unsafe { &(*[<DMA $periph>]::ptr())}
                 }
 
-                #[cfg(feature = "h7")]
-                fn ccr(&self) -> &[<dma $periph>]::st::CR {
-                // fn ccr(&self) -> &u8 {
-                    &self.regs().st[$ch].cr
-                }
+                // // #[cfg(feature = "h7")]
+                // fn ccr(&self) -> &[<dma $periph>]::st::CR {
+                // // fn ccr(&self) -> &u8 {
+                //     #[cfg(feature = "h7")]
+                //     &self.regs().st($ch).cr
+                //     #[cfg(not(feature = "h7"))]
+                //     &self.regs().ch($ch).cr
+                // }z
+                //
+                // // #[cfg(not(any(feature = "h7", feature = "f3", feature = "g0")))]
+                // // fn ccr(&self) -> &[<dma $periph>]::[<CCR $ch>] {
+                // //     &self.regs().[<ccr $ch>]
+                // // }
+                //
+                // #[cfg(any(feature = "f3", feature = "g0"))]
+                // // fn ccr(&self) -> &[<dma $periph>]::ch::cr {
+                //  fn ccr(&self) -> i8 {
+                //     &self.regs().[<ch $ch>].cr
+                // }
 
-                #[cfg(not(any(feature = "h7", feature = "f3", feature = "g0")))]
-                fn ccr(&self) -> &[<dma $periph>]::[<CCR $ch>] {
-                    &self.regs().[<ccr $ch>]
-                }
+                // #[cfg(not(feature = "h7"))] // due to num_data size diff
+                // /// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
+                // /// interrupt. Note that this fn has been (perhaps) depreciated by the standalone fn.
+                // pub fn cfg_channel(
+                //     &mut self,
+                //     periph_addr: u32,
+                //     mem_addr: u32,
+                //     // num_data: u16,
+                //     num_data: u32,
+                //     direction: Direction,
+                //     periph_size: DataSize,
+                //     mem_size: DataSize,
+                //     cfg: ChannelCfg,
+                // ) {
+                //     cfg_channel(
+                //         &mut self.regs(),
+                //         DmaChannel::[<C $ch>],
+                //         periph_addr,
+                //         mem_addr,
+                //         num_data,
+                //         direction,
+                //         periph_size,
+                //         mem_size,
+                //         cfg,
+                //     )
+                // }
 
-                #[cfg(any(feature = "f3", feature = "g0"))]
-                // fn ccr(&self) -> &[<dma $periph>]::ch::cr {
-                 fn ccr(&self) -> i8 {
-                    &self.regs().[<ch $ch>].cr
-                }
-
-                #[cfg(not(feature = "h7"))] // due to num_data size diff
-                /// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
-                /// interrupt. Note that this fn has been (perhaps) depreciated by the standalone fn.
-                pub fn cfg_channel(
-                    &mut self,
-                    periph_addr: u32,
-                    mem_addr: u32,
-                    num_data: u16,
-                    direction: Direction,
-                    periph_size: DataSize,
-                    mem_size: DataSize,
-                    cfg: ChannelCfg,
-                ) {
-                    cfg_channel(
-                        &mut self.regs(),
-                        DmaChannel::[<C $ch>],
-                        periph_addr,
-                        mem_addr,
-                        num_data,
-                        direction,
-                        periph_size,
-                        mem_size,
-                        cfg,
-                    )
-                }
-
-                #[cfg(feature = "h7")]
+                // #[cfg(feature = "h7")]
                 /// Configure a DMA channel. See L4 RM 0394, section 11.4.4. Sets the Transfer Complete
                 /// interrupt. Note that this fn has been (perhaps) depreciated by the standalone fn.
                 pub fn cfg_channel(
@@ -2304,7 +1607,10 @@ macro_rules! make_chan_struct {
 
                 /// Stop a DMA transfer, if in progress.
                 pub fn stop(&mut self) {
-                    let ccr = self.ccr();
+                    #[cfg(feature = "h7")]
+                    let ccr = self.regs().st($ch).cr();
+                    #[cfg(not(feature = "h7"))]
+                    let ccr = self.regs().ch($ch).cr();
 
                     ccr.modify(|_, w| w.en().clear_bit());
                     while ccr.read().en().bit_is_set() {}
@@ -2335,30 +1641,32 @@ cfg_if! {
         make_chan_struct!(1, 1);
         make_chan_struct!(1, 2);
         make_chan_struct!(1, 3);
+        #[cfg(not(any(feature = "c011", feature = "c031")))]
         make_chan_struct!(1, 4);
+        #[cfg(not(any(feature = "c011", feature = "c031")))]
         make_chan_struct!(1, 5);
-        #[cfg(not(feature = "g0"))]
+        #[cfg(not(any(feature = "g0", feature = "c0")))]
         make_chan_struct!(1, 6);
-        #[cfg(not(feature = "g0"))]
+        #[cfg(not(any(feature = "g0", feature = "c0")))]
         make_chan_struct!(1, 7);
         #[cfg(any(feature = "l5", feature = "g4"))]
         make_chan_struct!(1, 8);
 
         #[cfg(feature = "h7")]
         make_chan_struct!(2, 0);
-        #[cfg(not(any(feature = "g0", feature = "wb")))]
+        #[cfg(not(any(feature = "g0", feature = "wb", feature = "c0")))]
         make_chan_struct!(2, 1);
-        #[cfg(not(any(feature = "g0", feature = "wb")))]
+        #[cfg(not(any(feature = "g0", feature = "wb", feature = "c0")))]
         make_chan_struct!(2, 2);
-        #[cfg(not(any(feature = "g0", feature = "wb")))]
+        #[cfg(not(any(feature = "g0", feature = "wb", feature = "c0")))]
         make_chan_struct!(2, 3);
-        #[cfg(not(any(feature = "g0", feature = "wb")))]
+        #[cfg(not(any(feature = "g0", feature = "wb", feature = "c0")))]
         make_chan_struct!(2, 4);
-        #[cfg(not(any(feature = "g0", feature = "wb")))]
+        #[cfg(not(any(feature = "g0", feature = "wb", feature = "c0")))]
         make_chan_struct!(2, 5);
-        #[cfg(not(any(feature = "g0", feature = "wb")))]
+        #[cfg(not(any(feature = "g0", feature = "wb", feature = "c0")))]
         make_chan_struct!(2, 6);
-        #[cfg(not(any(feature = "g0", feature = "wb")))]
+        #[cfg(not(any(feature = "g0", feature = "wb", feature = "c0")))]
         make_chan_struct!(2, 7);
         #[cfg(any(feature = "l5", feature = "g4"))]
         make_chan_struct!(2, 8);

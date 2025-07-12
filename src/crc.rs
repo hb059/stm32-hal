@@ -19,20 +19,20 @@ impl CrcExt for CRC {
     fn crc(self, rcc: &mut RCC) -> Crc {
         cfg_if! {
             if #[cfg(feature = "f3")] {
-                rcc.ahbenr.modify(|_, w| w.crcen().set_bit());
+                rcc.ahbenr().modify(|_, w| w.crcen().bit(true));
                 // F3 doesn't appear to have a crcrst field in `ahbrstr`, per RM.
-            } else if #[cfg(feature = "g0")] {
-                rcc.ahbenr.modify(|_, w| w.crcen().set_bit());
-                rcc.ahbrstr.modify(|_, w| w.crcrst().set_bit());
-                rcc.ahbrstr.modify(|_, w| w.crcrst().clear_bit());
+            } else if #[cfg(any(feature = "g0", feature = "c0"))] {
+                rcc.ahbenr().modify(|_, w| w.crcen().bit(true));
+                rcc.ahbrstr().modify(|_, w| w.crcrst().bit(true));
+                rcc.ahbrstr().modify(|_, w| w.crcrst().clear_bit());
             } else if #[cfg(any(feature = "l4", feature = "wb", feature = "l5", feature = "g4"))] {
-                rcc.ahb1enr.modify(|_, w| w.crcen().set_bit());
-                rcc.ahb1rstr.modify(|_, w| w.crcrst().set_bit());
-                rcc.ahb1rstr.modify(|_, w| w.crcrst().clear_bit());
+                rcc.ahb1enr().modify(|_, w| w.crcen().bit(true));
+                rcc.ahb1rstr().modify(|_, w| w.crcrst().bit(true));
+                rcc.ahb1rstr().modify(|_, w| w.crcrst().clear_bit());
             } else { // H7
-                rcc.ahb4enr.modify(|_, w| w.crcen().set_bit());
-                rcc.ahb4rstr.modify(|_, w| w.crcrst().set_bit());
-                rcc.ahb4rstr.modify(|_, w| w.crcrst().clear_bit());
+                rcc.ahb4enr().modify(|_, w| w.crcen().bit(true));
+                rcc.ahb4rstr().modify(|_, w| w.crcrst().bit(true));
+                rcc.ahb4rstr().modify(|_, w| w.crcrst().clear_bit());
             }
         }
 
@@ -56,7 +56,7 @@ impl Crc {
 
         // manual says unit must be reset (or DR read) before change of polynomial
         // (technically only in case of ongoing calculation, but DR is buffered)
-        self.regs.cr.modify(|_, w| unsafe {
+        self.regs.cr().modify(|_, w| unsafe {
             w.polysize()
                 .bits(config.poly.polysize())
                 .rev_in()
@@ -64,24 +64,24 @@ impl Crc {
                 .rev_out()
                 .bit(config.reverse_output)
                 .reset()
-                .set_bit()
+                .bit(true)
         });
         cfg_if! {
             if #[cfg(any(feature = "h7"))] {
-                self.regs.pol.write(|w| w.pol().bits(config.poly.pol()));
+                self.regs.pol().write(|w| unsafe { w.pol().bits(config.poly.pol())});
             } else {
-                self.regs.pol.write(|w| unsafe { w.bits(config.poly.pol()) });
+                self.regs.pol().write(|w| unsafe { w.bits(config.poly.pol()) });
             }
         }
 
         // writing to INIT sets DR to its value
-        #[cfg(not(any(feature = "h7", feature = "l4")))]
+        // #[cfg(not(any(feature = "h7", feature = "l4")))]
+        // self.regs
+        //     .init()
+        //     .write(|w| unsafe { w.crc_init().bits(config.initial) });
+        // #[cfg(any(feature = "h7", feature = "l4"))]
         self.regs
-            .init
-            .write(|w| unsafe { w.crc_init().bits(config.initial) });
-        #[cfg(any(feature = "h7", feature = "l4"))]
-        self.regs
-            .init
+            .init()
             .write(|w| unsafe { w.init().bits(config.initial) });
     }
 
@@ -93,21 +93,20 @@ impl Crc {
         let mut words = data.chunks_exact(4);
         for word in words.by_ref() {
             let word = u32::from_be_bytes(word.try_into().unwrap());
-            // todo: Put back once PAC settles. Currently causing error on H7
-            // self.regs.dr_mut().write(|w| w.dr().bits(word));
+            self.regs.dr().write(unsafe { |w| w.dr().bits(word) });
         }
 
         // there will be at most 3 bytes remaining, so 1 half-word and 1 byte
         let mut half_word = words.remainder().chunks_exact(2);
         if let Some(half_word) = half_word.next() {
             let _half_word = u16::from_be_bytes(half_word.try_into().unwrap());
-            // todo: Put back once PAC settles. Currently causing error on H7
-            // self.regs.dr16_mut().write(|w| w.dr16().bits(half_word));
+            self.regs
+                .dr16()
+                .write(unsafe { |w| w.dr16().bits(_half_word) });
         }
 
         if let Some(byte) = half_word.remainder().first() {
-            // todo: Put back once PAC settles. Currently causing error on H7
-            // self.regs.dr8_mut().write(|w| w.dr8().bits(*byte));
+            self.regs.dr8().write(unsafe { |w| w.dr8().bits(*byte) });
         }
     }
 
@@ -123,7 +122,7 @@ impl Crc {
     /// This does not reset the configuration options.
     pub fn finish(&mut self) -> u32 {
         let result = self.read_crc();
-        self.regs.cr.modify(|_, w| w.reset().set_bit());
+        self.regs.cr().modify(|_, w| w.reset().bit(true));
         result
     }
 
@@ -141,7 +140,7 @@ impl Crc {
     /// algorithm that does not apply an output XOR or reverse the output bits.
     pub fn read_state(&self) -> u32 {
         let state = self.read_crc_no_xor();
-        if self.regs.cr.read().rev_out().bit_is_set() {
+        if self.regs.cr().read().rev_out().bit_is_set() {
             state.reverse_bits()
         } else {
             state
@@ -152,19 +151,20 @@ impl Crc {
     #[inline(always)]
     fn read_crc_no_xor(&self) -> u32 {
         #[cfg(not(any(feature = "h7", feature = "l4")))]
-        return self.regs.dr.read().dr().bits();
+        return self.regs.dr().read().dr().bits();
         #[cfg(any(feature = "h7", feature = "l4"))]
         return self.regs.dr().read().dr().bits();
     }
 
     cfg_if! {
-        if #[cfg(any(feature = "f3x4", feature = "g0", feature = "g4", feature = "h7", feature = "wb"))] {
+        if #[cfg(any(feature = "f3x4", feature = "g0", feature = "g4", feature = "h7", feature = "wb",
+            feature = "l5", feature = "c0"))] {
             /// Write the independent data register. The IDR can be used as
             /// temporary storage. It is not cleared on CRC hash reset.
             ///
             /// The IDR is not involved with CRC calculation.
             pub fn set_idr(&mut self, value: u32) {
-                self.regs.idr.write(|w| unsafe { w.idr().bits(value) });
+                self.regs.idr().write(|w| unsafe { w.idr().bits(value) });
             }
         } else {
             /// Write the independent data register. The IDR can be used as
@@ -172,25 +172,26 @@ impl Crc {
             ///
             /// The IDR is not involved with CRC calculation.
             pub fn set_idr(&mut self, value: u8) {
-                self.regs.idr.write(|w| unsafe { w.idr().bits(value) });
+                self.regs.idr().write(|w| unsafe { w.idr().bits(value) });
             }
         }
     }
 
     cfg_if! {
-        if #[cfg(any(feature = "f3x4", feature = "g0", feature = "g4", feature = "h7", feature = "wb"))] {
+        if #[cfg(any(feature = "f3x4", feature = "g0", feature = "g4", feature = "h7", feature = "wb",
+            feature = "l5", feature = "c0"))] {
             /// Get the current value of the independent data register.
             ///
             /// The IDR is not involved with CRC calculation.
             pub fn get_idr(&self) -> u32 {
-                self.regs.idr.read().idr().bits()
+                self.regs.idr().read().idr().bits()
             }
         } else {
             /// Get the current value of the independent data register.
             ///
             /// The IDR is not involved with CRC calculation.
             pub fn get_idr(&self) -> u8 {
-                self.regs.idr.read().idr().bits()
+                self.regs.idr().read().idr().bits()
             }
         }
     }

@@ -10,9 +10,9 @@ use core::ops::Deref;
 use crate::dma::DmaInput;
 #[cfg(not(any(feature = "l552", feature = "h5")))]
 use crate::dma::{self, ChannelCfg, DmaChannel};
-#[cfg(feature = "g0")]
+#[cfg(any(feature = "c0", feature = "h5"))]
 use crate::pac::DMA as DMA1;
-#[cfg(not(any(feature = "g0", feature = "h5")))]
+#[cfg(not(any(feature = "h5", feature = "c0")))]
 use crate::pac::DMA1;
 use crate::{
     MAX_ITERS,
@@ -26,7 +26,7 @@ macro_rules! busy_wait {
         let mut i = 0;
 
         loop {
-            let isr = $regs.isr.read();
+            let isr = $regs.isr().read();
 
             i += 1;
             if i >= MAX_ITERS {
@@ -36,22 +36,24 @@ macro_rules! busy_wait {
             if isr.$flag().bit_is_set() {
                 break;
             } else if isr.berr().bit_is_set() {
-                $regs.icr.write(|w| w.berrcf().set_bit());
+                $regs.icr().write(|w| w.berrcf().bit(true));
                 return Err(Error::Bus);
             } else if isr.arlo().bit_is_set() {
-                $regs.icr.write(|w| w.arlocf().set_bit());
+                $regs.icr().write(|w| w.arlocf().bit(true));
                 return Err(Error::Arbitration);
             } else if isr.nackf().bit_is_set() {
-                $regs.icr.write(|w| w.stopcf().set_bit().nackcf().set_bit());
+                $regs
+                    .icr()
+                    .write(|w| w.stopcf().bit(true).nackcf().bit(true));
 
                 // If a pending TXIS flag is set, write dummy data to TXDR
-                if $regs.isr.read().txis().bit_is_set() {
-                    $regs.txdr.write(|w| unsafe { w.txdata().bits(0) });
+                if $regs.isr().read().txis().bit_is_set() {
+                    $regs.txdr().write(|w| unsafe { w.txdata().bits(0) });
                 }
 
                 // If TXDR is not flagged as empty, write 1 to flush it
-                if $regs.isr.read().txe().bit_is_clear() {
-                    $regs.isr.write(|w| w.txe().set_bit());
+                if $regs.isr().read().txe().bit_is_clear() {
+                    $regs.isr().write(|w| w.txe().bit(true));
                 }
 
                 return Err(Error::Nack);
@@ -176,7 +178,7 @@ where
         R::en_reset(rcc);
 
         // Make sure the I2C unit is disabled so we can configure it
-        regs.cr1.modify(|_, w| w.pe().clear_bit());
+        regs.cr1().modify(|_, w| w.pe().clear_bit());
 
         // todo: Slave currently nonfunctional!
         // todo: Check out the RM recipes for slave transmitter and receiver.
@@ -312,7 +314,7 @@ where
         assert!(scll <= 255);
         assert!(sclh <= 255);
 
-        regs.timingr.write(|w| unsafe {
+        regs.timingr().write(|w| unsafe {
             w.presc().bits(presc as u8);
             w.scldel().bits(scldel as u8);
             w.sdadel().bits(sdadel as u8);
@@ -338,13 +340,13 @@ where
             NoiseFilter::Disabled => (true, 0),
         };
 
-        regs.cr1.modify(|_, w| unsafe {
+        regs.cr1().modify(|_, w| unsafe {
             w.anfoff().bit(anf_bit);
             w.dnf().bits(dnf_bits)
         });
 
         if let I2cMode::Slave = cfg.mode {
-            regs.cr1.modify(|_, w| w.nostretch().bit(cfg.nostretch));
+            regs.cr1().modify(|_, w| w.nostretch().bit(cfg.nostretch));
         }
 
         let mut result = Self { regs, cfg };
@@ -354,7 +356,7 @@ where
         }
 
         // Enable the peripheral
-        result.regs.cr1.write(|w| w.pe().set_bit());
+        result.regs.cr1().write(|w| w.pe().bit(true));
 
         result
     }
@@ -372,12 +374,12 @@ where
         // RELOAD is set, PECBYTE has no effect.
         // Caution: Changing the PECEN configuration is not allowed when the I2C is enabled.
 
-        let originally_enabled = self.regs.cr1.read().pe().bit_is_set();
+        let originally_enabled = self.regs.cr1().read().pe().bit_is_set();
         if originally_enabled {
-            self.regs.cr1.modify(|_, w| w.pe().clear_bit());
+            self.regs.cr1().modify(|_, w| w.pe().clear_bit());
 
             let mut i = 0;
-            while self.regs.cr1.read().pe().bit_is_set() {
+            while self.regs.cr1().read().pe().bit_is_set() {
                 i += 1;
                 if i >= MAX_ITERS {
                     return Err(Error::Hardware);
@@ -385,15 +387,15 @@ where
             }
         }
 
-        self.regs.cr1.modify(|_, w| w.pecen().set_bit());
+        self.regs.cr1().modify(|_, w| w.pecen().bit(true));
 
         // todo: Timeout detection?
 
         // todo: HWCFGR Missing from PAC
-        // self.regs.hwcfgr.modify(|_, w| w.smbus().set_bit());
+        // self.regs.hwcfgr().modify(|_, w| w.smbus().bit(true));
 
         if originally_enabled {
-            self.regs.cr1.modify(|_, w| w.pe().set_bit());
+            self.regs.cr1().modify(|_, w| w.pe().bit(true));
         }
 
         Ok(())
@@ -406,7 +408,7 @@ where
         // cycle (ie. up to 0.5/freq)
 
         let mut i = 0;
-        while self.regs.cr2.read().start().bit_is_set() {
+        while self.regs.cr2().read().start().bit_is_set() {
             i += 1;
             if i >= MAX_ITERS {
                 return Err(Error::Hardware);
@@ -422,7 +424,7 @@ where
             // Wait until we have received something
             busy_wait!(self.regs, rxne);
 
-            *byte = self.regs.rxdr.read().rxdata().bits();
+            *byte = self.regs.rxdr().read().rxdata().bits();
         }
 
         Ok(())
@@ -434,7 +436,7 @@ where
         // automatically. This could be up to 50% of a bus
         // cycle (ie. up to 0.5/freq)
         let mut i = 0;
-        while self.regs.cr2.read().start().bit_is_set() {
+        while self.regs.cr2().read().start().bit_is_set() {
             i += 1;
             if i >= MAX_ITERS {
                 return Err(Error::Hardware);
@@ -450,7 +452,9 @@ where
             busy_wait!(self.regs, txis); // TXDR register is empty
 
             // Put byte on the wire
-            self.regs.txdr.write(|w| unsafe { w.txdata().bits(*byte) });
+            self.regs
+                .txdr()
+                .write(|w| unsafe { w.txdata().bits(*byte) });
         }
 
         Ok(())
@@ -462,7 +466,7 @@ where
         // automatically. This could be up to 50% of a bus
         // cycle (ie. up to 0.5/freq)
         let mut i = 0;
-        while self.regs.cr2.read().start().bit_is_set() {
+        while self.regs.cr2().read().start().bit_is_set() {
             i += 1;
             if i >= MAX_ITERS {
                 return Err(Error::Hardware);
@@ -478,7 +482,9 @@ where
             busy_wait!(self.regs, txis); // TXDR register is empty
 
             // Put byte on the wire
-            self.regs.txdr.write(|w| unsafe { w.txdata().bits(*byte) });
+            self.regs
+                .txdr()
+                .write(|w| unsafe { w.txdata().bits(*byte) });
         }
 
         // Wait until the write finishes before beginning to read.
@@ -492,7 +498,7 @@ where
             // Wait until we have received something
             busy_wait!(self.regs, rxne);
 
-            *byte = self.regs.rxdr.read().rxdata().bits();
+            *byte = self.regs.rxdr().read().rxdata().bits();
         }
 
         Ok(())
@@ -503,7 +509,7 @@ where
         // L44 RM: "Master communication initialization (address phase)
         // In order to initiate the communication, the user must program the following parameters for
         // the addressed slave in the I2C_CR2 register:
-        self.regs.cr2.write(|w| {
+        self.regs.cr2().write(|w| {
             unsafe {
                 // Addressing mode (7-bit or 10-bit): ADD10
                 w.add10().bit(self.cfg.address_bits as u8 != 0);
@@ -527,7 +533,7 @@ where
                 // must be selected (AUTOEND=1). In this case, the STOP condition automatically follows the
                 // PEC transmission.
                 w.pecbyte().bit(self.cfg.smbus);
-                w.start().set_bit()
+                w.start().bit(true)
             }
         });
         // Note on start bit (RM):
@@ -539,13 +545,13 @@ where
 
     /// Helper function to prevent repetition between `read`, `write_read`, and `read_dma`.
     fn set_cr2_read(&mut self, addr: u8, len: u8) {
-        self.regs.cr2.write(|w| {
+        self.regs.cr2().write(|w| {
             unsafe {
                 w.add10().bit(self.cfg.address_bits as u8 != 0);
                 w.sadd().bits((addr << 1) as u16);
-                w.rd_wrn().set_bit(); // read
+                w.rd_wrn().bit(true); // read
                 w.nbytes().bits(len);
-                w.autoend().set_bit(); // automatic end mode
+                w.autoend().bit(true); // automatic end mode
                 // When the SMBus master wants to receive the PEC followed by a STOP at the end of the
                 // transfer, automatic end mode can be selected (AUTOEND=1). The PECBYTE bit must be
                 // set and the slave address must be programmed, before setting the START bit. In this case,
@@ -553,7 +559,7 @@ where
                 // versus the I2C_PECR register content. A NACK response is given to the PEC byte, followed
                 // by a STOP condition.
                 w.pecbyte().bit(self.cfg.smbus);
-                w.start().set_bit()
+                w.start().bit(true)
             }
         });
     }
@@ -587,8 +593,8 @@ where
         // in the I2C_CR1 register. Data is loaded from an SRAM area configured using the DMA
         // peripheral (see Section 11: Direct memory access controller (DMA) on page 295) to the
         // I2C_TXDR register whenever the TXIS bit is set.
-        self.regs.cr1.modify(|_, w| w.txdmaen().set_bit());
-        while self.regs.cr1.read().txdmaen().bit_is_clear() {}
+        self.regs.cr1().modify(|_, w| w.txdmaen().bit(true));
+        while self.regs.cr1().read().txdmaen().bit_is_clear() {}
 
         // Only the data are transferred with DMA.
         // • In master mode: the initialization, the slave address, direction, number of bytes and
@@ -611,10 +617,10 @@ where
         // page 1169.
         // Note: If DMA is used for transmission, the TXIE bit does not need to be enabled
 
-        #[cfg(feature = "h7")]
+        // #[cfg(feature = "h7")]
         let num_data = len as u32;
-        #[cfg(not(feature = "h7"))]
-        let num_data = len as u16;
+        // #[cfg(not(feature = "h7"))]
+        // let num_data = len as u16;
 
         match dma_periph {
             dma::DmaPeriph::Dma1 => {
@@ -622,7 +628,7 @@ where
                 dma::cfg_channel(
                     &mut regs,
                     channel,
-                    &self.regs.txdr as *const _ as u32,
+                    &self.regs.txdr() as *const _ as u32,
                     ptr as u32,
                     num_data,
                     dma::Direction::ReadFromMem,
@@ -631,13 +637,13 @@ where
                     channel_cfg,
                 );
             }
-            #[cfg(not(any(feature = "f3x4", feature = "g0", feature = "wb")))]
+            #[cfg(dma2)]
             dma::DmaPeriph::Dma2 => {
                 let mut regs = unsafe { &(*pac::DMA2::ptr()) };
                 dma::cfg_channel(
                     &mut regs,
                     channel,
-                    &self.regs.txdr as *const _ as u32,
+                    &self.regs.txdr() as *const _ as u32,
                     ptr as u32,
                     num_data,
                     dma::Direction::ReadFromMem,
@@ -675,8 +681,8 @@ where
         // configured using the DMA peripheral (refer to Section 11: Direct memory access controller
         // (DMA) on page 295) whenever the RXNE bit is set. Only the data (including PEC) are
         // transferred with DMA.
-        self.regs.cr1.modify(|_, w| w.rxdmaen().set_bit());
-        while self.regs.cr1.read().rxdmaen().bit_is_clear() {}
+        self.regs.cr1().modify(|_, w| w.rxdmaen().bit(true));
+        while self.regs.cr1().read().rxdmaen().bit_is_clear() {}
 
         // • In master mode, the initialization, the slave address, direction, number of bytes and
         // START bit are programmed by software. When all data are transferred using DMA, the
@@ -692,10 +698,7 @@ where
         // SMBus Master receiver on page 1171.
         // Note: If DMA is used for reception, the RXIE bit does not need to be enabled
 
-        #[cfg(feature = "h7")]
         let num_data = len as u32;
-        #[cfg(not(feature = "h7"))]
-        let num_data = len as u16;
 
         match dma_periph {
             dma::DmaPeriph::Dma1 => {
@@ -703,7 +706,7 @@ where
                 dma::cfg_channel(
                     &mut regs,
                     channel,
-                    &self.regs.rxdr as *const _ as u32,
+                    &self.regs.rxdr() as *const _ as u32,
                     ptr as u32,
                     num_data,
                     dma::Direction::ReadFromPeriph,
@@ -712,13 +715,13 @@ where
                     channel_cfg,
                 );
             }
-            #[cfg(not(any(feature = "f3x4", feature = "g0", feature = "wb")))]
+            #[cfg(dma2)]
             dma::DmaPeriph::Dma2 => {
                 let mut regs = unsafe { &(*pac::DMA2::ptr()) };
                 dma::cfg_channel(
                     &mut regs,
                     channel,
-                    &self.regs.rxdr as *const _ as u32,
+                    &self.regs.rxdr() as *const _ as u32,
                     ptr as u32,
                     num_data,
                     dma::Direction::ReadFromPeriph,
@@ -732,7 +735,7 @@ where
 
     /// Print the (raw) contents of the status register.
     pub fn read_status(&self) -> u32 {
-        unsafe { self.regs.isr.read().bits() }
+        unsafe { self.regs.isr().read().bits() }
     }
 }
 //

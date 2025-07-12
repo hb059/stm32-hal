@@ -83,7 +83,7 @@ where
 
     fn i2c_init(&self, speed: u32, pclk: u32) {
         // Make sure the I2C unit is disabled so we can configure it
-        self.regs.cr1.modify(|_, w| w.pe().clear_bit());
+        self.regs.cr1().modify(|_, w| w.pe().clear_bit());
 
         // Calculate settings for I2C speed modes
         let clock = pclk;
@@ -92,7 +92,7 @@ where
 
         // Configure bus frequency into I2C peripheral
         self.regs
-            .cr2
+            .cr2()
             .write(|w| unsafe { w.freq().bits(freq as u8) });
 
         let trise = if speed <= 100_000 {
@@ -102,7 +102,9 @@ where
         };
 
         // Configure correct rise times
-        self.regs.trise.write(|w| w.trise().bits(trise as u8));
+        self.regs
+            .trise()
+            .write(|w| unsafe { w.trise().bits(trise as u8) });
 
         // I2C clock control calculation
         if speed <= 100_000 {
@@ -112,7 +114,7 @@ where
             };
 
             // Set clock to standard mode with appropriate parameters for selected speed
-            self.regs.ccr.write(|w| unsafe {
+            self.regs.ccr().write(|w| unsafe {
                 w.f_s()
                     .clear_bit()
                     .duty()
@@ -127,58 +129,58 @@ where
                 let ccr = if ccr < 1 { 1 } else { ccr };
 
                 // Set clock to fast mode with appropriate parameters for selected speed (2:1 duty cycle)
-                self.regs.ccr.write(|w| unsafe {
-                    w.f_s().set_bit().duty().clear_bit().ccr().bits(ccr as u16)
+                self.regs.ccr().write(|w| unsafe {
+                    w.f_s().bit(true).duty().clear_bit().ccr().bits(ccr as u16)
                 });
             } else {
                 let ccr = clock / (speed * 25);
                 let ccr = if ccr < 1 { 1 } else { ccr };
 
                 // Set clock to fast mode with appropriate parameters for selected speed (16:9 duty cycle)
-                self.regs.ccr.write(|w| unsafe {
-                    w.f_s().set_bit().duty().set_bit().ccr().bits(ccr as u16)
+                self.regs.ccr().write(|w| unsafe {
+                    w.f_s().bit(true).duty().bit(true).ccr().bits(ccr as u16)
                 });
             }
         }
 
         // Enable the I2C processing
-        self.regs.cr1.modify(|_, w| w.pe().set_bit());
+        self.regs.cr1().modify(|_, w| w.pe().bit(true));
     }
 
     pub fn check_and_clear_error_flags(&self) -> Result<i2c1::sr1::R, Error> {
         // Note that flags should only be cleared once they have been registered. If flags are
         // cleared otherwise, there may be an inherent race condition and flags may be missed.
-        let sr1 = self.regs.sr1.read();
+        let sr1 = self.regs.sr1().read();
 
         if sr1.timeout().bit_is_set() {
-            self.regs.sr1.modify(|_, w| w.timeout().clear_bit());
+            self.regs.sr1().modify(|_, w| w.timeout().clear_bit());
             return Err(Error::TIMEOUT);
         }
 
         if sr1.pecerr().bit_is_set() {
-            self.regs.sr1.modify(|_, w| w.pecerr().clear_bit());
+            self.regs.sr1().modify(|_, w| w.pecerr().clear_bit());
             return Err(Error::CRC);
         }
 
         if sr1.ovr().bit_is_set() {
-            self.regs.sr1.modify(|_, w| w.ovr().clear_bit());
+            self.regs.sr1().modify(|_, w| w.ovr().clear_bit());
             return Err(Error::OVERRUN);
         }
 
         if sr1.af().bit_is_set() {
-            self.regs.sr1.modify(|_, w| w.af().clear_bit());
+            self.regs.sr1().modify(|_, w| w.af().clear_bit());
             return Err(Error::NACK);
         }
 
         if sr1.arlo().bit_is_set() {
-            self.regs.sr1.modify(|_, w| w.arlo().clear_bit());
+            self.regs.sr1().modify(|_, w| w.arlo().clear_bit());
             return Err(Error::ARBITRATION);
         }
 
         // The errata indicates that BERR may be incorrectly detected. It recommends ignoring and
         // clearing the BERR bit instead.
         if sr1.berr().bit_is_set() {
-            self.regs.sr1.modify(|_, w| w.berr().clear_bit());
+            self.regs.sr1().modify(|_, w| w.berr().clear_bit());
         }
 
         Ok(sr1)
@@ -186,7 +188,7 @@ where
 
     pub fn write_bytes(&mut self, addr: u8, bytes: &[u8]) -> Result<(), Error> {
         // Send a START condition
-        self.regs.cr1.modify(|_, w| w.start().set_bit());
+        self.regs.cr1().modify(|_, w| w.start().bit(true));
 
         // Wait until START condition was generated
         while self.check_and_clear_error_flags()?.sb().bit_is_clear() {}
@@ -195,14 +197,14 @@ where
         while {
             self.check_and_clear_error_flags()?;
 
-            let sr2 = self.regs.sr2.read();
+            let sr2 = self.regs.sr2().read();
             sr2.msl().bit_is_clear() && sr2.busy().bit_is_clear()
         } {}
 
         // Set up current address, we're trying to talk to
         self.regs
-            .dr
-            .write(|w| unsafe { w.bits(u32::from(addr) << 1) });
+            .dr()
+            .write(|w| unsafe { w.bits(u16::from(addr) << 1) });
 
         // Wait until address was sent
         while {
@@ -214,7 +216,7 @@ where
         } {}
 
         // Clear condition by reading SR2
-        self.regs.sr2.read();
+        self.regs.sr2().read();
 
         // Send bytes
         for c in bytes {
@@ -233,7 +235,7 @@ where
         } {}
 
         // Push out a byte of data
-        self.regs.dr.write(|w| unsafe { w.bits(u32::from(byte)) });
+        self.regs.dr().write(|w| unsafe { w.bits(u16::from(byte)) });
 
         // Wait until byte is transferred
         while {
@@ -249,10 +251,10 @@ where
             // Check for any potential error conditions.
             self.check_and_clear_error_flags()?;
 
-            self.regs.sr1.read().rx_ne().bit_is_clear()
+            self.regs.sr1().read().rx_ne().bit_is_clear()
         } {}
 
-        let value = self.regs.dr.read().bits() as u8;
+        let value = self.regs.dr().read().bits() as u8;
         Ok(value)
     }
 }
@@ -300,10 +302,10 @@ where
                     self.write_bytes(address, buffer)?;
 
                     // Send a STOP condition
-                    self.regs.cr1.modify(|_, w| w.stop().set_bit());
+                    self.regs.cr1().modify(|_, w| w.stop().bit(true));
 
                     // Wait for STOP condition to transmit.
-                    while self.regs.cr1.read().stop().bit_is_set() {}
+                    while self.regs.cr1().read().stop().bit_is_set() {}
                 }
 
                 Operation::Read(buffer) => {
@@ -311,15 +313,15 @@ where
                         // Send a START condition and set ACK bit
                         self.regs
                             .cr1
-                            .modify(|_, w| w.start().set_bit().ack().set_bit());
+                            .modify(|_, w| w.start().bit(true).ack().bit(true));
 
                         // Wait until START condition was generated
-                        while self.regs.sr1.read().sb().bit_is_clear() {}
+                        while self.regs.sr1().read().sb().bit_is_clear() {}
 
                         // Also wait until signalled we're master and everything is waiting for us
                         while {
-                            let sr2 = self.regs.sr2.read();
-                            sr2.msl().bit_is_clear() && sr2.busy().bit_is_clear()
+                            let sr2 = self.regs.sr2().read();
+                            sr2().msl().bit_is_clear() && sr2().busy().bit_is_clear()
                         } {}
 
                         // Set up current address, we're trying to talk to
@@ -330,11 +332,11 @@ where
                         // Wait until address was sent
                         while {
                             self.check_and_clear_error_flags()?;
-                            self.regs.sr1.read().addr().bit_is_clear()
+                            self.regs.sr1().read().addr().bit_is_clear()
                         } {}
 
                         // Clear condition by reading SR2
-                        self.regs.sr2.read();
+                        self.regs.sr2().read();
 
                         // Receive bytes into buffer
                         for c in buffer {
@@ -344,13 +346,13 @@ where
                         // Prepare to send NACK then STOP after next byte
                         self.regs
                             .cr1
-                            .modify(|_, w| w.ack().clear_bit().stop().set_bit());
+                            .modify(|_, w| w.ack().clear_bit().stop().bit(true));
 
                         // Receive last byte
                         *last = self.recv_byte()?;
 
                         // Wait for the STOP to be sent.
-                        while self.regs.cr1.read().stop().bit_is_set() {}
+                        while self.regs.cr1().read().stop().bit_is_set() {}
                     } else {
                         return Err(Error::OVERRUN);
                     }

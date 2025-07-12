@@ -3,7 +3,7 @@
 use core::ptr;
 
 use cfg_if::cfg_if;
-use cortex_m::{asm, delay::Delay};
+use cortex_m::asm;
 use paste::paste;
 
 #[cfg(any(feature = "f3", feature = "l4"))]
@@ -161,7 +161,7 @@ impl Default for SampleTime {
 
 #[derive(Clone, Copy)]
 #[repr(u8)]
-/// Select single-ended, or differential inputs. Sets bits in the ADC[x]_DIFSEL register.
+/// Select single-ended, or differential inputs. Sets bits in the ADC\[x\]_DIFSEL register.
 pub enum InputType {
     SingleEnded = 0,
     Differential = 1,
@@ -188,18 +188,18 @@ pub enum OperationMode {
 /// – The system clock
 /// – PLLSAI1 (single ADC implementation)
 /// Refer to RCC Section for more information on how to generate ADC dedicated clock.
-/// To select this scheme, bits CKMODE[1:0] of the ADCx_CCR register must be reset.
+/// To select this scheme, bits CKMODE\[1:0\] of the ADCx_CCR register must be reset.
 /// 2. The ADC clock can be derived from the AHB clock of the ADC bus interface, divided by
 /// a programmable factor (1, 2 or 4). In this mode, a programmable divider factor can be
-/// selected (/1, 2 or 4 according to bits CKMODE[1:0]).
-/// To select this scheme, bits CKMODE[1:0] of the ADCx_CCR register must be different
+/// selected (/1, 2 or 4 according to bits CKMODE\[1:0\]).
+/// To select this scheme, bits CKMODE\[1:0\] of the ADCx_CCR register must be different
 /// from “00”.
 pub enum ClockMode {
     /// Use Kernel Clock adc_ker_ck_input divided by PRESC. Asynchronous to AHB clock
     Async = 0b00,
     /// Use AHB clock rcc_hclk3 (or just hclk depending on variant).
-    /// "For option 2), a prescaling factor of 1 (CKMODE[1:0]=01) can be used only if the AHB
-    /// prescaler is set to 1 (HPRE[3:0] = 0xxx in RCC_CFGR register)."
+    /// "For option 2), a prescaling factor of 1 (CKMODE\[1:0\]=01) can be used only if the AHB
+    /// prescaler is set to 1 (HPRE\[3:0\] = 0xxx in RCC_CFGR register)."
     SyncDiv1 = 0b01,
     /// Use AHB clock rcc_hclk3 (or just hclk depending on variant) divided by 2
     SyncDiv2 = 0b10,
@@ -389,14 +389,14 @@ macro_rules! hal {
                             } else if #[cfg(feature = "h7")] {
                                 match device {
                                     AdcDevice::One | AdcDevice::Two => {
-                                        rcc.ahb1enr.modify(|_, w| w.adc12en().set_bit());
+                                        rcc.ahb1enr().modify(|_, w| w.adc12en().bit(true));
                                     }
                                     AdcDevice::Three => {
-                                        rcc.ahb4enr.modify(|_, w| w.adc3en().set_bit());
+                                        rcc.ahb4enr().modify(|_, w| w.adc3en().bit(true));
                                     }
                                 }
                             } else if #[cfg(any(feature = "g4"))] {
-                                rcc.ahb2enr.modify(|_, w| w.adc12en().set_bit());
+                                rcc.ahb2enr().modify(|_, w| w.adc12en().bit(true));
                                 // rcc_en_reset!(ahb2, [<adc $rcc_num>], rcc);
                             } else {  // ie L4, L5, G0(?)
                                 rcc_en_reset!(ahb2, adc, rcc);
@@ -404,7 +404,7 @@ macro_rules! hal {
                         }
                     }
 
-                    common_regs.ccr.modify(|_, w| unsafe {
+                    common_regs.ccr().modify(|_, w| unsafe {
                         #[cfg(not(any(feature = "f3", feature = "l4x5")))] // PAC ommission l4x5?
                         w.presc().bits(result.cfg.prescaler as u8);
                         return w.ckmode().bits(result.cfg.clock_mode as u8);
@@ -433,11 +433,14 @@ macro_rules! hal {
                     // ...The software is allowed to write this bit only when ADSTART=0 and JADSTART=0 (which
                     // ensures that no conversion is ongoing)."
                     // todo: On H7, allow disabling boost, either manually, or by checking the clock speed.
-                    #[cfg(all(feature = "h7", not(any(feature = "h743", feature = "h753"))))]
-                    result.regs.cr.modify(|_, w| w.boost().bits(1));
+                    #[cfg(all(feature = "h7", not(any(feature = "h743", feature = "h753", feature = "h735"))))]
+                    result.regs.cr().modify(|_, w| unsafe { w.boost().bits(1)});
 
                     #[cfg(any(feature = "h743", feature = "h753"))]
-                    result.regs.cr.modify(|_, w| w.boost().bit(true));
+                    result.regs.cr().modify(|_, w| w.boost().bit(true));
+
+                    // #[cfg(feature = "h735")]
+                    // result.regs.cr().modify(|_, w| w.boost().bits(1));
 
                     result.enable();
 
@@ -446,7 +449,7 @@ macro_rules! hal {
 
                     // Don't set continuous mode until after configuring VDDA, since it needs
                     // to take a oneshot reading.
-                    result.regs.cfgr.modify(|_, w| w.cont().bit(result.cfg.operation_mode as u8 != 0));
+                    result.regs.cfgr().modify(|_, w| w.cont().bit(result.cfg.operation_mode as u8 != 0));
 
                     for ch in 1..10 {
                         result.set_sample_time(ch, result.cfg.sample_time);
@@ -471,16 +474,17 @@ macro_rules! hal {
                     panic!("ADC sequence length must be in 1..=16")
                 }
 
-                self.regs.sqr1.modify(|_, w| unsafe { w.l().bits(len - 1) });
+                self.regs.sqr1().modify(|_, w| unsafe { w.l().bits(len - 1) });
             }
 
             /// Set the alignment mode.
             pub fn set_align(&self, align: Align) {
-                #[cfg(feature = "h7")]
-                self.regs.cfgr2.modify(|_, w| w.lshift().bits(align as u8));
+                #[cfg(all(feature = "h7", not(feature = "h735")))]
+                self.regs.cfgr2().modify(|_, w| unsafe { w.lshift().bits(align as u8)});
+                // todo: How to do on H735?
 
                 #[cfg(not(feature = "h7"))]
-                self.regs.cfgr.modify(|_, w| w.align().bit(align as u8 != 0));
+                self.regs.cfgr().modify(|_, w| w.align().bit(align as u8 != 0));
             }
 
             /// Enable the ADC.
@@ -488,14 +492,14 @@ macro_rules! hal {
             /// operation.
             pub fn enable(&mut self) {
                 // 1. Clear the ADRDY bit in the ADC_ISR register by writing ‘1’.
-                self.regs.isr.modify(|_, w| w.adrdy().set_bit());
+                self.regs.isr().modify(|_, w| w.adrdy().bit(true));
                 // 2. Set ADEN=1.
-                self.regs.cr.modify(|_, w| w.aden().set_bit());  // Enable
+                self.regs.cr().modify(|_, w| w.aden().bit(true));  // Enable
                 // 3. Wait until ADRDY=1 (ADRDY is set after the ADC startup time). This can be done
                 // using the associated interrupt (setting ADRDYIE=1).
-                while self.regs.isr.read().adrdy().bit_is_clear() {}  // Wait until ready
+                while self.regs.isr().read().adrdy().bit_is_clear() {}  // Wait until ready
                 // 4. Clear the ADRDY bit in the ADC_ISR register by writing ‘1’ (optional).
-                self.regs.isr.modify(|_, w| w.adrdy().set_bit());
+                self.regs.isr().modify(|_, w| w.adrdy().bit(true));
             }
 
             /// Disable the ADC.
@@ -508,11 +512,11 @@ macro_rules! hal {
                 self.stop_conversions();
 
                 // 2. Set ADDIS=1.
-                self.regs.cr.modify(|_, w| w.addis().set_bit()); // Disable
+                self.regs.cr().modify(|_, w| w.addis().bit(true)); // Disable
 
                 // 3. If required by the application, wait until ADEN=0, until the analog
                 // ADC is effectively disabled (ADDIS will automatically be reset once ADEN=0)
-                while self.regs.cr.read().aden().bit_is_set() {}
+                while self.regs.cr().read().aden().bit_is_set() {}
             }
 
             /// If any conversions are in progress, stop them. This is a step listed in the RMs
@@ -528,29 +532,29 @@ macro_rules! hal {
                 // injected conversions ongoing by setting JADSTP=1.
                 // Stopping conversions will reset the ongoing ADC operation. Then the ADC can be
                 // reconfigured (ex: changing the channel selection or the trigger) ready for a new operation.
-                let cr_val = self.regs.cr.read();
-                if cr_val.adstart().bit_is_set() || self.regs.cr.read().jadstart().bit_is_set() {
-                    self.regs.cr.modify(|_, w| {
-                        w.adstp().set_bit();
-                        w.jadstp().set_bit()
+                let cr_val = self.regs.cr().read();
+                if cr_val.adstart().bit_is_set() || self.regs.cr().read().jadstart().bit_is_set() {
+                    self.regs.cr().modify(|_, w| {
+                        w.adstp().bit(true);
+                        w.jadstp().bit(true)
                     });
 
-                    while self.regs.cr.read().adstart().bit_is_set() || self.regs.cr.read().jadstart().bit_is_set() {}
+                    while self.regs.cr().read().adstart().bit_is_set() || self.regs.cr().read().jadstart().bit_is_set() {}
                 }
             }
 
             /// Check if the ADC is enabled.
             pub fn is_enabled(&self) -> bool {
-                self.regs.cr.read().aden().bit_is_set()
+                self.regs.cr().read().aden().bit_is_set()
             }
 
             /// Check if the ADC voltage regulator is enabled.
             pub fn is_advregen_enabled(&self) -> bool {
                 cfg_if! {
                     if #[cfg(feature = "f3")] {
-                        self.regs.cr.read().advregen().bits() == 1
+                        self.regs.cr().read().advregen().bits() == 1
                     } else {
-                        self.regs.cr.read().advregen().bit_is_set()
+                        self.regs.cr().read().advregen().bit_is_set()
                     }
                 }
             }
@@ -560,10 +564,10 @@ macro_rules! hal {
                 cfg_if! {
                     if #[cfg(feature = "f3")] {
                         // `F303 RM, 15.3.6:
-                        // 1. Change ADVREGEN[1:0] bits from ‘10’ (disabled state, reset state) into ‘00’.
-                        // 2. Change ADVREGEN[1:0] bits from ‘00’ into ‘01’ (enabled state).
-                        self.regs.cr.modify(|_, w| unsafe { w.advregen().bits(0b00)});
-                        self.regs.cr.modify(|_, w| unsafe { w.advregen().bits(0b01)});
+                        // 1. Change ADVREGEN\[1:0\] bits from ‘10’ (disabled state, reset state) into ‘00’.
+                        // 2. Change ADVREGEN\[1:0\] bits from ‘00’ into ‘01’ (enabled state).
+                        self.regs.cr().modify(|_, w| unsafe { w.advregen().bits(0b00)});
+                        self.regs.cr().modify(|_, w| unsafe { w.advregen().bits(0b01)});
                     } else {
                         // L443 RM, 16.4.6; G4 RM, section 21.4.6: Deep-power-down mode (DEEPPWD) and ADC voltage
                         // regulator (ADVREGEN)
@@ -573,9 +577,9 @@ macro_rules! hal {
                         // register).
                         // To start ADC operations, it is first needed to exit Deep-power-down mode by setting bit
                         // DEEPPWD=0.""
-                        self.regs.cr.modify(|_, w| {
+                        self.regs.cr().modify(|_, w| {
                             w.deeppwd().clear_bit();   // Exit deep sleep mode.
-                            w.advregen().set_bit()   // Enable voltage regulator.
+                            w.advregen().bit(true)   // Enable voltage regulator.
 
                         });
                     }
@@ -591,10 +595,10 @@ macro_rules! hal {
                 cfg_if! {
                     if #[cfg(feature = "f3")] {
                         // `F303 RM, 15.3.6:
-                        // 1. Change ADVREGEN[1:0] bits from ‘01’ (enabled state) into ‘00’.
-                        // 2. Change ADVREGEN[1:0] bits from ‘00’ into ‘10’ (disabled state)
-                        self.regs.cr.modify(|_, w| unsafe { w.advregen().bits(0b00) });
-                        self.regs.cr.modify(|_, w| unsafe { w.advregen().bits(0b10) });
+                        // 1. Change ADVREGEN\[1:0\] bits from ‘01’ (enabled state) into ‘00’.
+                        // 2. Change ADVREGEN\[1:0\] bits from ‘00’ into ‘10’ (disabled state)
+                        self.regs.cr().modify(|_, w| unsafe { w.advregen().bits(0b00) });
+                        self.regs.cr().modify(|_, w| unsafe { w.advregen().bits(0b10) });
                     } else {
                         // L4 RM, 16.4.6: Writing DEEPPWD=1 automatically disables the ADC voltage
                         // regulator and bit ADVREGEN is automatically cleared.
@@ -603,7 +607,7 @@ macro_rules! hal {
                         // In ADC Deep-power-down mode (DEEPPWD=1), the internal analog calibration is lost and
                         // it is necessary to either relaunch a calibration or re-apply the calibration factor which was
                         // previously saved (
-                        self.regs.cr.modify(|_, w| w.deeppwd().set_bit());
+                        self.regs.cr().modify(|_, w| w.deeppwd().bit(true));
                         // todo: We could offer an option to disable advregen without setting deeppwd,
                         // todo, which would keep calibration.
                     }
@@ -614,7 +618,6 @@ macro_rules! hal {
             ///
             /// This is based on the MAX_ADVREGEN_STARTUP_US of the device.
             fn wait_advregen_startup(&self, ahb_freq: u32) {
-                let cp = unsafe { cortex_m::Peripherals::steal() };
                 crate::delay_us(MAX_ADVREGEN_STARTUP_US, ahb_freq)
             }
 
@@ -635,7 +638,7 @@ macro_rules! hal {
                     self.disable();
                 }
 
-                self.regs.cr.modify(|_, w| w
+                self.regs.cr().modify(|_, w| w
                     // RM:
                     // The calibration factor to be applied for single-ended input conversions is different from the
                     // factor to be applied for differential input conversions:
@@ -647,27 +650,31 @@ macro_rules! hal {
                     .adcaldif().bit(input_type as u8 != 0)
                     // The calibration is then initiated by software by setting bit ADCAL=1.
                     // 4. Set ADCAL=1.
-                    .adcal().set_bit()); // start calibration.
+                    .adcal().bit(true)); // start calibration.
 
                 // ADCAL bit stays at 1 during all the
                 // calibration sequence. It is then cleared by hardware as soon the calibration completes. At
                 // this time, the associated calibration factor is stored internally in the analog ADC and also in
-                // the bits CALFACT_S[6:0] or CALFACT_D[6:0] of ADC_CALFACT register (depending on
+                // the bits CALFACT_S\[6:0\] or CALFACT_D\[6:0\] of ADC_CALFACT register (depending on
                 // single-ended or differential input calibration)
                 // 5. Wait until ADCAL=0.
-                while self.regs.cr.read().adcal().bit_is_set() {}
+                while self.regs.cr().read().adcal().bit_is_set() {}
 
                 // 6. The calibration factor can be read from ADC_CALFACT register.
                 match input_type {
                     InputType::SingleEnded => {
-                        let val = self.regs.calfact.read().calfact_s().bits();
+                        let val = self.regs.calfact().read().calfact_s().bits();
                         #[cfg(not(feature = "h7"))]
+                        let val = val as u16;
+                        #[cfg(feature = "h735")]
                         let val = val as u16;
                         self.cfg.cal_single_ended = Some(val);
                     }
                     InputType::Differential => {
-                         let val = self.regs.calfact.read().calfact_d().bits();
+                         let val = self.regs.calfact().read().calfact_d().bits();
                          #[cfg(not(feature = "h7"))]
+                         let val = val as u16;
+                         #[cfg(feature = "h735")]
                          let val = val as u16;
                          self.cfg.cal_differential = Some(val);
                     }
@@ -693,12 +700,12 @@ macro_rules! hal {
                 if let Some(cal) = self.cfg.cal_single_ended {
                     #[cfg(not(feature = "h7"))]
                     let cal = cal as u8;
-                    self.regs.calfact.modify(|_, w| unsafe { w.calfact_s().bits(cal) });
+                    self.regs.calfact().modify(|_, w| unsafe { w.calfact_s().bits(cal.try_into().unwrap()) });
                 }
                 if let Some(cal) = self.cfg.cal_differential {
                     #[cfg(not(feature = "h7"))]
                     let cal = cal as u8;
-                    self.regs.calfact.modify(|_, w| unsafe { w.calfact_d().bits(cal) });
+                    self.regs.calfact().modify(|_, w| unsafe { w.calfact_d().bits(cal.try_into().unwrap()) });
                 }
 
                 // 3. When a conversion is launched, the calibration factor will be injected into the analog
@@ -711,8 +718,8 @@ macro_rules! hal {
             pub fn set_input_type(&mut self, channel: u8, input_type: InputType) {
                 // L44 RM, 16.4.7:
                 // Channels can be configured to be either single-ended input or differential input by writing
-                // into bits DIFSEL[15:1] in the ADC_DIFSEL register. This configuration must be written while
-                // the ADC is disabled (ADEN=0). Note that DIFSEL[18:16,0] are fixed to single ended
+                // into bits DIFSEL\[15:1\] in the ADC_DIFSEL register. This configuration must be written while
+                // the ADC is disabled (ADEN=0). Note that DIFSEL\[18:16,0\] are fixed to single ended
                 // channels and are always read as 0.
                 let was_enabled = self.is_enabled();
                 if was_enabled {
@@ -722,19 +729,19 @@ macro_rules! hal {
                 // Note that we don't use the `difsel` PAC accessor here, due to its varying
                 // implementations across different PACs.
                 // todo: 1 offset? Experiment in firmware.
-                let val = self.regs.difsel.read().bits();
+                let val = self.regs.difsel().read().bits();
 
                 let val_new = match input_type {
                     InputType::SingleEnded => val & !(1 << channel),
                     InputType::Differential => val | (1 << channel),
                 };
-                self.regs.difsel.write(|w| unsafe { w.bits(val_new)});
+                self.regs.difsel().write(|w| unsafe { w.bits(val_new)});
 
                 // The commented code below is for some PAC variants taht support a method to
                 // choose the diffsel field.
 
                 // let v = input_type as u8 != 0;
-                // self.regs.difsel.modify(|_, w| {
+                // self.regs.difsel().modify(|_, w| {
                 //     match channel {
                 //         // todo: Do these need to be offset by 1??
                 //         0 => w.difsel_0().bit(v),
@@ -768,27 +775,53 @@ macro_rules! hal {
             /// Select a sequence to sample, by inputting a single channel and position.
             pub fn set_sequence(&mut self, chan: u8, position: u8) {
                 match position {
-                    1 => self.regs.sqr1.modify(|_, w| unsafe { w.sq1().bits(chan) }),
-                    2 => self.regs.sqr1.modify(|_, w| unsafe { w.sq2().bits(chan) }),
-                    3 => self.regs.sqr1.modify(|_, w| unsafe { w.sq3().bits(chan) }),
-                    4 => self.regs.sqr1.modify(|_, w| unsafe { w.sq4().bits(chan) }),
-                    5 => self.regs.sqr2.modify(|_, w| unsafe { w.sq5().bits(chan) }),
-                    6 => self.regs.sqr2.modify(|_, w| unsafe { w.sq6().bits(chan) }),
-                    7 => self.regs.sqr2.modify(|_, w| unsafe { w.sq7().bits(chan) }),
-                    8 => self.regs.sqr2.modify(|_, w| unsafe { w.sq8().bits(chan) }),
-                    9 => self.regs.sqr2.modify(|_, w| unsafe { w.sq9().bits(chan) }),
-                    10 => self.regs.sqr3.modify(|_, w| unsafe { w.sq10().bits(chan) }),
-                    11 => self.regs.sqr3.modify(|_, w| unsafe { w.sq11().bits(chan) }),
-                    12 => self.regs.sqr3.modify(|_, w| unsafe { w.sq12().bits(chan) }),
-                    13 => self.regs.sqr3.modify(|_, w| unsafe { w.sq13().bits(chan) }),
-                    14 => self.regs.sqr3.modify(|_, w| unsafe { w.sq14().bits(chan) }),
-                    15 => self.regs.sqr4.modify(|_, w| unsafe { w.sq15().bits(chan) }),
-                    16 => self.regs.sqr4.modify(|_, w| unsafe { w.sq16().bits(chan) }),
+                    1 => self.regs.sqr1().modify(|_, w| unsafe { w.sq1().bits(chan) }),
+                    2 => self.regs.sqr1().modify(|_, w| unsafe { w.sq2().bits(chan) }),
+                    3 => self.regs.sqr1().modify(|_, w| unsafe { w.sq3().bits(chan) }),
+                    4 => self.regs.sqr1().modify(|_, w| unsafe { w.sq4().bits(chan) }),
+                    5 => self.regs.sqr2().modify(|_, w| unsafe { w.sq5().bits(chan) }),
+                    6 => self.regs.sqr2().modify(|_, w| unsafe { w.sq6().bits(chan) }),
+                    7 => self.regs.sqr2().modify(|_, w| unsafe { w.sq7().bits(chan) }),
+                    8 => self.regs.sqr2().modify(|_, w| unsafe { w.sq8().bits(chan) }),
+                    9 => self.regs.sqr2().modify(|_, w| unsafe { w.sq9().bits(chan) }),
+                    10 => self.regs.sqr3().modify(|_, w| unsafe { w.sq10().bits(chan) }),
+                    11 => self.regs.sqr3().modify(|_, w| unsafe { w.sq11().bits(chan) }),
+                    12 => self.regs.sqr3().modify(|_, w| unsafe { w.sq12().bits(chan) }),
+                    13 => self.regs.sqr3().modify(|_, w| unsafe { w.sq13().bits(chan) }),
+                    14 => self.regs.sqr3().modify(|_, w| unsafe { w.sq14().bits(chan) }),
+                    15 => self.regs.sqr4().modify(|_, w| unsafe { w.sq15().bits(chan) }),
+                    16 => self.regs.sqr4().modify(|_, w| unsafe { w.sq16().bits(chan) }),
                     _ => panic!("Sequence out of bounds. Only 16 positions are available, starting at 1."),
-                }
+                };
 
-                #[cfg(feature = "h7")]
-                self.regs.pcsel.modify(|r, w| unsafe { w.pcsel().bits(r.pcsel().bits() | (1 << chan)) });
+                #[cfg(all(feature = "h7", not(feature = "h735")))]
+                self.regs.pcsel().modify(|r, w| unsafe { w.pcsel().bits(r.pcsel().bits() | (1 << chan)) });
+
+                // todo: Figure this out, and put back (July 2025/pack 0.16)
+                // #[cfg(feature = "h735")]
+                // match chan {
+                //     0 => self.regs.pcsel().modify(|r, w| w.pcsel0().bit(true)),
+                //     1 => self.regs.pcsel().modify(|r, w| w.pcsel1().bit(true)),
+                //     2 => self.regs.pcsel().modify(|r, w| w.pcsel2().bit(true)),
+                //     3 => self.regs.pcsel().modify(|r, w| w.pcsel3().bit(true)),
+                //     4 => self.regs.pcsel().modify(|r, w| w.pcsel4().bit(true)),
+                //     5 => self.regs.pcsel().modify(|r, w| w.pcsel5().bit(true)),
+                //     6 => self.regs.pcsel().modify(|r, w| w.pcsel6().bit(true)),
+                //     7 => self.regs.pcsel().modify(|r, w| w.pcsel7().bit(true)),
+                //     8 => self.regs.pcsel().modify(|r, w| w.pcsel8().bit(true)),
+                //     9 => self.regs.pcsel().modify(|r, w| w.pcsel9().bit(true)),
+                //     10 => self.regs.pcsel().modify(|r, w| w.pcsel10().bit(true)),
+                //     11 => self.regs.pcsel().modify(|r, w| w.pcsel11().bit(true)),
+                //     12 => self.regs.pcsel().modify(|r, w| w.pcsel12().bit(true)),
+                //     13 => self.regs.pcsel().modify(|r, w| w.pcsel13().bit(true)),
+                //     14 => self.regs.pcsel().modify(|r, w| w.pcsel14().bit(true)),
+                //     15 => self.regs.pcsel().modify(|r, w| w.pcsel15().bit(true)),
+                //     16 => self.regs.pcsel().modify(|r, w| w.pcsel16().bit(true)),
+                //     17 => self.regs.pcsel().modify(|r, w| w.pcsel17().bit(true)),
+                //     18 => self.regs.pcsel().modify(|r, w| w.pcsel18().bit(true)),
+                //     19=> self.regs.pcsel().modify(|r, w| w.pcsel19().bit(true)),
+                //     _ => ()
+                // };
             }
 
             /// Select the sample time for a given channel.
@@ -799,31 +832,31 @@ macro_rules! hal {
                 self.stop_conversions();
 
                 // self.disable();
-                // while self.regs.cr.read().adstart().bit_is_set() || self.regs.cr.read().jadstart().bit_is_set() {}
+                // while self.regs.cr().read().adstart().bit_is_set() || self.regs.cr().read().jadstart().bit_is_set() {}
 
                 unsafe {
                     match chan {
                         #[cfg(not(feature = "f3"))]
-                        0 => self.regs.smpr1.modify(|_, w| w.smp0().bits(smp as u8)),
-                        1 => self.regs.smpr1.modify(|_, w| w.smp1().bits(smp as u8)),
-                        2 => self.regs.smpr1.modify(|_, w| w.smp2().bits(smp as u8)),
-                        3 => self.regs.smpr1.modify(|_, w| w.smp3().bits(smp as u8)),
-                        4 => self.regs.smpr1.modify(|_, w| w.smp4().bits(smp as u8)),
-                        5 => self.regs.smpr1.modify(|_, w| w.smp5().bits(smp as u8)),
-                        6 => self.regs.smpr1.modify(|_, w| w.smp6().bits(smp as u8)),
-                        7 => self.regs.smpr1.modify(|_, w| w.smp7().bits(smp as u8)),
-                        8 => self.regs.smpr1.modify(|_, w| w.smp8().bits(smp as u8)),
-                        9 => self.regs.smpr1.modify(|_, w| w.smp9().bits(smp as u8)),
-                        11 => self.regs.smpr2.modify(|_, w| w.smp10().bits(smp as u8)),
-                        12 => self.regs.smpr2.modify(|_, w| w.smp12().bits(smp as u8)),
-                        13 => self.regs.smpr2.modify(|_, w| w.smp13().bits(smp as u8)),
-                        14 => self.regs.smpr2.modify(|_, w| w.smp14().bits(smp as u8)),
-                        15 => self.regs.smpr2.modify(|_, w| w.smp15().bits(smp as u8)),
-                        16 => self.regs.smpr2.modify(|_, w| w.smp16().bits(smp as u8)),
-                        17 => self.regs.smpr2.modify(|_, w| w.smp17().bits(smp as u8)),
-                        18 => self.regs.smpr2.modify(|_, w| w.smp18().bits(smp as u8)),
-                        // 19 => self.regs.smpr2.modify(|_, w| w.smp19().bits(smp as u8)),
-                        // 20 => self.regs.smpr2.modify(|_, w| w.smp20().bits(smp as u8)),
+                        0 => self.regs.smpr1().modify(|_, w| w.smp0().bits(smp as u8)),
+                        1 => self.regs.smpr1().modify(|_, w| w.smp1().bits(smp as u8)),
+                        2 => self.regs.smpr1().modify(|_, w| w.smp2().bits(smp as u8)),
+                        3 => self.regs.smpr1().modify(|_, w| w.smp3().bits(smp as u8)),
+                        4 => self.regs.smpr1().modify(|_, w| w.smp4().bits(smp as u8)),
+                        5 => self.regs.smpr1().modify(|_, w| w.smp5().bits(smp as u8)),
+                        6 => self.regs.smpr1().modify(|_, w| w.smp6().bits(smp as u8)),
+                        7 => self.regs.smpr1().modify(|_, w| w.smp7().bits(smp as u8)),
+                        8 => self.regs.smpr1().modify(|_, w| w.smp8().bits(smp as u8)),
+                        9 => self.regs.smpr1().modify(|_, w| w.smp9().bits(smp as u8)),
+                        11 => self.regs.smpr2().modify(|_, w| w.smp10().bits(smp as u8)),
+                        12 => self.regs.smpr2().modify(|_, w| w.smp12().bits(smp as u8)),
+                        13 => self.regs.smpr2().modify(|_, w| w.smp13().bits(smp as u8)),
+                        14 => self.regs.smpr2().modify(|_, w| w.smp14().bits(smp as u8)),
+                        15 => self.regs.smpr2().modify(|_, w| w.smp15().bits(smp as u8)),
+                        16 => self.regs.smpr2().modify(|_, w| w.smp16().bits(smp as u8)),
+                        17 => self.regs.smpr2().modify(|_, w| w.smp17().bits(smp as u8)),
+                        18 => self.regs.smpr2().modify(|_, w| w.smp18().bits(smp as u8)),
+                        // 19 => self.regs.smpr2().modify(|_, w| w.smp19().bits(smp as u8)),
+                        // 20 => self.regs.smpr2().modify(|_, w| w.smp20().bits(smp as u8)),
                         _ => unreachable!(),
                     };
                 }
@@ -859,7 +892,7 @@ macro_rules! hal {
                     // VDDA will be wrong,
                     // and all readings using voltage conversion will be wrong.
                     // todo: Take an ADC1 reading if this is the case, or let the user pass in VDDA from there.
-                    // if dp_adc.cr.read().aden().bit_is_set() {
+                    // if dp_adc.cr().read().aden().bit_is_set() {
                     //     self.vdda_calibrated = 3.3; // A guess.
                     //     return
                     // }
@@ -883,7 +916,7 @@ macro_rules! hal {
                     // at a minimum 4 us. With 640.5 ADC cycles we have a minimum of 8 us at 80 MHz, leaving
                     // some headroom.
 
-                    common_regs.ccr.modify(|_, w| w.vrefen().set_bit());
+                    common_regs.ccr().modify(|_, w| w.vrefen().bit(true));
                     // User manual table: "Embedded internal voltage reference" states that it takes a maximum of 12 us
                     // to stabilize the internal voltage reference, we wait a little more.
 
@@ -898,7 +931,7 @@ macro_rules! hal {
                     let reading = self.read(VREFINT_CH);
                     self.stop_conversions();
 
-                    common_regs.ccr.modify(|_, w| w.vrefen().clear_bit());
+                    common_regs.ccr().modify(|_, w| w.vrefen().clear_bit());
 
                     // The VDDA power supply voltage applied to the microcontroller may be subject to variation or
                     // not precisely known. The embedded internal voltage reference (VREFINT) and its calibration
@@ -956,31 +989,68 @@ macro_rules! hal {
                 // • Setting the JADSTART bit in the ADC_CR register (for an injected channel)
                 // • External hardware trigger event (for a regular or injected channel)
                 // (Here, we assume a regular channel)
-                self.regs.cr.modify(|_, w| w.adstart().set_bit());  // Start
+                self.regs.cr().modify(|_, w| w.adstart().bit(true));  // Start
 
                 // After the regular sequence is complete, after each conversion is complete,
                 // the EOC (end of regular conversion) flag is set.
                 // After the regular sequence is complete: The EOS (end of regular sequence) flag is set.
-                while self.regs.isr.read().eos().bit_is_clear() {}  // wait until complete.
+                while self.regs.isr().read().eos().bit_is_clear() {}  // wait until complete.
             }
 
+            #[cfg(feature = "h7")]
+            /// Read data from a conversion. In OneShot mode, this will generally be run right
+            /// after `start_conversion`.
+            pub fn read_result(&mut self, ch: u8) -> u16 {
+                #[cfg(not(feature = "h735"))]
+                self.regs.pcsel().modify(|r, w| unsafe { w.pcsel().bits(r.pcsel().bits() & !(1 << ch)) });
+
+                // todo: Figure this out, and put back (July 2025/pack 0.16)
+                // #[cfg(feature = "h735")]
+                // match ch {
+                //     0 => self.regs.pcsel().modify(|r, w| w.pcsel0().bit(true)),
+                //     1 => self.regs.pcsel().modify(|r, w| w.pcsel1().bit(true)),
+                //     2 => self.regs.pcsel().modify(|r, w| w.pcsel2().bit(true)),
+                //     3 => self.regs.pcsel().modify(|r, w| w.pcsel3().bit(true)),
+                //     4 => self.regs.pcsel().modify(|r, w| w.pcsel4().bit(true)),
+                //     5 => self.regs.pcsel().modify(|r, w| w.pcsel5().bit(true)),
+                //     6 => self.regs.pcsel().modify(|r, w| w.pcsel6().bit(true)),
+                //     7 => self.regs.pcsel().modify(|r, w| w.pcsel7().bit(true)),
+                //     8 => self.regs.pcsel().modify(|r, w| w.pcsel8().bit(true)),
+                //     9 => self.regs.pcsel().modify(|r, w| w.pcsel9().bit(true)),
+                //     10 => self.regs.pcsel().modify(|r, w| w.pcsel10().bit(true)),
+                //     11 => self.regs.pcsel().modify(|r, w| w.pcsel11().bit(true)),
+                //     12 => self.regs.pcsel().modify(|r, w| w.pcsel12().bit(true)),
+                //     13 => self.regs.pcsel().modify(|r, w| w.pcsel13().bit(true)),
+                //     14 => self.regs.pcsel().modify(|r, w| w.pcsel14().bit(true)),
+                //     15 => self.regs.pcsel().modify(|r, w| w.pcsel15().bit(true)),
+                //     16 => self.regs.pcsel().modify(|r, w| w.pcsel16().bit(true)),
+                //     17 => self.regs.pcsel().modify(|r, w| w.pcsel17().bit(true)),
+                //     18 => self.regs.pcsel().modify(|r, w| w.pcsel18().bit(true)),
+                //     19=> self.regs.pcsel().modify(|r, w| w.pcsel19().bit(true)),
+                //     _ => ()
+                // }
+
+                return self.regs.dr().read().bits() as u16;
+                return self.regs.dr().read().rdata().bits() as u16;
+            }
+
+            #[cfg(not(feature = "h7"))]
             /// Read data from a conversion. In OneShot mode, this will generally be run right
             /// after `start_conversion`.
             pub fn read_result(&mut self) -> u16 {
-                let ch = 18; // todo temp!!
-                #[cfg(feature = "h7")]
-                self.regs.pcsel.modify(|r, w| unsafe { w.pcsel().bits(r.pcsel().bits() & !(1 << ch)) });
-
                 #[cfg(feature = "l4")]
-                return self.regs.dr.read().bits() as u16;
+                return self.regs.dr().read().bits() as u16;
                 #[cfg(not(feature = "l4"))]
-                return self.regs.dr.read().rdata().bits() as u16;
+                return self.regs.dr().read().rdata().bits() as u16;
             }
 
             /// Take a single reading; return a raw integer value.
             pub fn read(&mut self, channel: u8) -> u16 {
                 self.start_conversion(&[channel]);
-                self.read_result()
+                #[cfg(feature = "h7")]
+                return self.read_result(channel);
+                #[cfg(not(feature = "h7"))]
+                return self.read_result();
             }
 
             /// Take a single reading; return a voltage.
@@ -992,7 +1062,7 @@ macro_rules! hal {
             /// Select and activate a trigger. See G4 RM, section 21.4.18:
             /// Conversion on external trigger and trigger polarit
             pub fn set_trigger(&mut self, trigger: Trigger, edge: TriggerEdge) {
-                self.regs.cfgr.modify(|_, w| unsafe {
+                self.regs.cfgr().modify(|_, w| unsafe {
                     w.exten().bits(edge as u8);
                     w.extsel().bits(trigger as u8)
                 });
@@ -1015,17 +1085,19 @@ macro_rules! hal {
                 self.stop_conversions();
 
                 #[cfg(not(feature = "h7"))]
-                self.regs.cfgr.modify(|_, w| {
+                self.regs.cfgr().modify(|_, w| {
                     w.dmacfg().bit(channel_cfg.circular == dma::Circular::Enabled);
-                    w.dmaen().set_bit()
+                    w.dmaen().bit(true)
                 });
 
-                #[cfg(feature = "h7")]
-                self.regs.cfgr.modify(|_, w| {
+                #[cfg(all(feature = "h7", not(feature = "h735")))]
+                self.regs.cfgr().modify(|_, w| {
                     // Note: To use non-DMA after this has been set, need to configure manually.
                     // ie set back to 0b00.
                     w.dmngt().bits(if channel_cfg.circular == dma::Circular::Enabled { 0b11 } else { 0b01 })
                 });
+
+                // todo: How to do in H735? Pac 0.16 change? Jully 2025.
 
                 // L44 RM, Table 41. "DMA1 requests for each channel
                 // todo: DMA2 support.
@@ -1064,7 +1136,7 @@ macro_rules! hal {
                 }
                 self.set_sequence_len(seq_len);
 
-                self.regs.cr.modify(|_, w| w.adstart().set_bit());  // Start
+                self.regs.cr().modify(|_, w| w.adstart().bit(true));  // Start
 
                 // Since converted channel values are stored into a unique data register, it is useful to use
                 // DMA for conversion of more than one channel. This avoids the loss of the data already
@@ -1102,10 +1174,7 @@ macro_rules! hal {
                 // • Scan sequence is stopped and reset.
                 // • The DMA is stopped.
 
-                #[cfg(feature = "h7")]
                 let num_data = len as u32;
-                #[cfg(not(feature = "h7"))]
-                let num_data = len as u16;
 
                 match dma_periph {
                     dma::DmaPeriph::Dma1 => {
@@ -1113,7 +1182,7 @@ macro_rules! hal {
                         dma::cfg_channel(
                             &mut regs,
                             dma_channel,
-                            &self.regs.dr as *const _ as u32,
+                            &self.regs.dr() as *const _ as u32,
                             ptr as u32,
                             num_data,
                             dma::Direction::ReadFromPeriph,
@@ -1122,13 +1191,13 @@ macro_rules! hal {
                             channel_cfg,
                         );
                     }
-                    #[cfg(not(feature = "g0"))]
+                    #[cfg(dma2)]
                     dma::DmaPeriph::Dma2 => {
                         let mut regs = unsafe { &(*pac::DMA2::ptr()) };
                         dma::cfg_channel(
                             &mut regs,
                             dma_channel,
-                            &self.regs.dr as *const _ as u32,
+                            &self.regs.dr() as *const _ as u32,
                             ptr as u32,
                             num_data,
                             dma::Direction::ReadFromPeriph,
@@ -1142,56 +1211,56 @@ macro_rules! hal {
 
             /// Enable a specific type of ADC interrupt.
             pub fn enable_interrupt(&mut self, interrupt: AdcInterrupt) {
-                self.regs.ier.modify(|_, w| match interrupt {
-                    AdcInterrupt::Ready => w.adrdyie().set_bit(),
-                    AdcInterrupt::EndOfConversion => w.eocie().set_bit(),
-                    AdcInterrupt::EndOfSequence => w.eosie().set_bit(),
-                    AdcInterrupt::EndofConversionInjected => w.jeocie().set_bit(),
-                    AdcInterrupt::EndOfSequenceInjected => w.jeosie().set_bit(),
-                    AdcInterrupt::Watchdog1 => w.awd1ie().set_bit(),
-                    AdcInterrupt::Watchdog2 => w.awd2ie().set_bit(),
-                    AdcInterrupt::Watchdog3 => w.awd3ie().set_bit(),
-                    AdcInterrupt::EndOfSamplingPhase => w.eosmpie().set_bit(),
-                    AdcInterrupt::Overrun => w.ovrie().set_bit(),
-                    AdcInterrupt::InjectedOverflow => w.jqovfie().set_bit(),
+                self.regs.ier().modify(|_, w| match interrupt {
+                    AdcInterrupt::Ready => w.adrdyie().bit(true),
+                    AdcInterrupt::EndOfConversion => w.eocie().bit(true),
+                    AdcInterrupt::EndOfSequence => w.eosie().bit(true),
+                    AdcInterrupt::EndofConversionInjected => w.jeocie().bit(true),
+                    AdcInterrupt::EndOfSequenceInjected => w.jeosie().bit(true),
+                    AdcInterrupt::Watchdog1 => w.awd1ie().bit(true),
+                    AdcInterrupt::Watchdog2 => w.awd2ie().bit(true),
+                    AdcInterrupt::Watchdog3 => w.awd3ie().bit(true),
+                    AdcInterrupt::EndOfSamplingPhase => w.eosmpie().bit(true),
+                    AdcInterrupt::Overrun => w.ovrie().bit(true),
+                    AdcInterrupt::InjectedOverflow => w.jqovfie().bit(true),
                 });
             }
 
             /// Clear an interrupt flag of the specified type. Consider running this in the
             /// corresponding ISR.
             pub fn clear_interrupt(&mut self, interrupt: AdcInterrupt) {
-                self.regs.isr.write(|w| match interrupt {
-                    AdcInterrupt::Ready => w.adrdy().set_bit(),
-                    AdcInterrupt::EndOfConversion => w.eoc().set_bit(),
-                    AdcInterrupt::EndOfSequence => w.eos().set_bit(),
-                    AdcInterrupt::EndofConversionInjected => w.jeoc().set_bit(),
-                    AdcInterrupt::EndOfSequenceInjected => w.jeos().set_bit(),
-                    AdcInterrupt::Watchdog1 => w.awd1().set_bit(),
-                    AdcInterrupt::Watchdog2 => w.awd2().set_bit(),
-                    AdcInterrupt::Watchdog3 => w.awd3().set_bit(),
-                    AdcInterrupt::EndOfSamplingPhase => w.eosmp().set_bit(),
-                    AdcInterrupt::Overrun => w.ovr().set_bit(),
-                    AdcInterrupt::InjectedOverflow => w.jqovf().set_bit(),
+                self.regs.isr().write(|w| match interrupt {
+                    AdcInterrupt::Ready => w.adrdy().bit(true),
+                    AdcInterrupt::EndOfConversion => w.eoc().bit(true),
+                    AdcInterrupt::EndOfSequence => w.eos().bit(true),
+                    AdcInterrupt::EndofConversionInjected => w.jeoc().bit(true),
+                    AdcInterrupt::EndOfSequenceInjected => w.jeos().bit(true),
+                    AdcInterrupt::Watchdog1 => w.awd1().bit(true),
+                    AdcInterrupt::Watchdog2 => w.awd2().bit(true),
+                    AdcInterrupt::Watchdog3 => w.awd3().bit(true),
+                    AdcInterrupt::EndOfSamplingPhase => w.eosmp().bit(true),
+                    AdcInterrupt::Overrun => w.ovr().bit(true),
+                    AdcInterrupt::InjectedOverflow => w.jqovf().bit(true),
                 });
                 // match interrupt {
-                //     AdcInterrupt::Ready => self.regs.icr.write(|_w| w.adrdy().set_bit()),
-                //     AdcInterrupt::EndOfConversion => self.regs.icr.write(|w| w.eoc().set_bit()),
-                //     AdcInterrupt::EndOfSequence => self.regs.icr.write(|_w| w.eos().set_bit()),
-                //     AdcInterrupt::EndofConversionInjected => self.regs.icr.write(|_w| w.jeoc().set_bit()),
-                //     AdcInterrupt::EndOfSequenceInjected => self.regs.icr.write(|_w| w.jeos().set_bit()),
-                //     AdcInterrupt::Watchdog1 => self.regs.icr.write(|_w| w.awd1().set_bit()),
-                //     AdcInterrupt::Watchdog2 => self.regs.icr.write(|_w| w.awd2().set_bit()),
-                //     AdcInterrupt::Watchdog3 => self.regs.icr.write(|_w| w.awd3().set_bit()),
-                //     AdcInterrupt::EndOfSamplingPhase => self.regs.icr.write(|_w| w.eosmp().set_bit()),
-                //     AdcInterrupt::Overrun => self.regs.icr.write(|_w| w.ovr().set_bit()),
-                //     AdcInterrupt::InjectedOverflow => self.regs.icr.write(|_w| w.jqovf().set_bit()),
+                //     AdcInterrupt::Ready => self.regs.icr().write(|_w| w.adrdy().bit(true)),
+                //     AdcInterrupt::EndOfConversion => self.regs.icr().write(|w| w.eoc().bit(true)),
+                //     AdcInterrupt::EndOfSequence => self.regs.icr().write(|_w| w.eos().bit(true)),
+                //     AdcInterrupt::EndofConversionInjected => self.regs.icr().write(|_w| w.jeoc().bit(true)),
+                //     AdcInterrupt::EndOfSequenceInjected => self.regs.icr().write(|_w| w.jeos().bit(true)),
+                //     AdcInterrupt::Watchdog1 => self.regs.icr().write(|_w| w.awd1().bit(true)),
+                //     AdcInterrupt::Watchdog2 => self.regs.icr().write(|_w| w.awd2().bit(true)),
+                //     AdcInterrupt::Watchdog3 => self.regs.icr().write(|_w| w.awd3().bit(true)),
+                //     AdcInterrupt::EndOfSamplingPhase => self.regs.icr().write(|_w| w.eosmp().bit(true)),
+                //     AdcInterrupt::Overrun => self.regs.icr().write(|_w| w.ovr().bit(true)),
+                //     AdcInterrupt::InjectedOverflow => self.regs.icr().write(|_w| w.jqovf().bit(true)),
                 // }
             }
 
 
         /// Print the (raw) contents of the status register.
     pub fn read_status(&self) -> u32 {
-        unsafe { self.regs.isr.read().bits() }
+        unsafe { self.regs.isr().read().bits() }
     }
         }
     }
@@ -1209,7 +1278,7 @@ hal!(ADC3, ADC3_4, adc3, 34);
 #[cfg(any(feature = "f303"))]
 hal!(ADC4, ADC3_4, adc4, 34);
 
-#[cfg(any(feature = "l4"))]
+#[cfg(any(feature = "l4", feature = "l5"))]
 hal!(ADC1, ADC_COMMON, adc1, _);
 
 #[cfg(any(
@@ -1223,10 +1292,6 @@ hal!(ADC2, ADC_COMMON, adc2, _);
 
 #[cfg(any(feature = "l4x5", feature = "l4x6",))]
 hal!(ADC3, ADC_COMMON, adc3, _);
-
-// todo: ADC 1 vs 2 on L5? L5 supports up to 2 ADCs, so I'm not sure what's going on here.
-#[cfg(any(feature = "l5"))]
-hal!(ADC, ADC_COMMON, adc1, _);
 
 // todo Implement ADC3 on H7. The issue is the enable / reset being on ahb4.
 cfg_if! {

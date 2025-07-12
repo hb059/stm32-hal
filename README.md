@@ -7,7 +7,7 @@ This library provides high-level access to STM32 peripherals.
 
 ## Requirements
 1. Provide high-level access to most STM32 peripherals
-2. Support these STM32 families: `F3`, `F4`, `L4`, `L5`, `G`, `H`, `U`, and `W`
+2. Support these STM32 families: `F3`, `F4`, `L4`, `L5`, `G`, `H5`, `H7`, `C0`,`WB`, `WL`
 3. Allow switching MCUs with minimal code change
 4. Provide a consistent API across peripheral modules
 5. Support both DMA and non-DMA interfaces
@@ -31,8 +31,14 @@ This library provides high-level access to STM32 peripherals.
 
 
 ## Supported MCUs
-F3, F4, L4, L5, G0, G4, H5, H7, WB, and WL. U5 is planned once its SVD files and PAC
-become available.
+F3, F4, L4, L5, G0, G4, H5, H7, WB, WL, C0.
+
+Legend. Green: Supported. Light blue: Partial support. Red: Not supported, and won't. Purple: 
+Not supported, and open to adding.
+
+![STM32 support](screenshots/stm32_support.png)
+
+
 
 Tested on the following devices:
 - STM32F303
@@ -41,7 +47,7 @@ Tested on the following devices:
 - STM32L552
 - STM32WB5MMG
 - STM32G431, G491, G473
-- STM32H743(V), H745 (both cores)
+- STM32H743(V), H745 (both cores), H723
 
 
 ## Getting started
@@ -221,7 +227,7 @@ Most peripheral modules use the following format:
 - When available, base setup and usage steps on instructions provided in Reference Manuals.
   These steps are copy+pasted in comments before the code that performs each one.
 - Don't use PAC convenience field settings; they're implemented inconsistently across PACs.
-  (eg don't use something like `en.enabled()`; use `en.set_bit()`.)
+  (eg don't use something like `en.enabled()`; use `en.bit(true)`.)
 - If using a commonly-named configuration enum like `Mode`, prefix it with the peripheral type,
   eg use `RadarMode` instead. This prevents namespace conflicts when importing the enums directly.
 
@@ -266,7 +272,7 @@ where
         let mut rcc = unsafe { &(*RCC::ptr()) };
         rcc_en_reset!(apb1, fcradar1, rcc);
 
-        regs.cr.modify(|_, w| w.prf().bit(prf as u8 != 0));        
+        regs.cr().modify(|_, w| w.prf().bit(prf as u8 != 0));        
 
         Self { regs, prf }
     }
@@ -277,12 +283,12 @@ where
 
         // 1. Select the hit to track by setting the HIT bits in the FCRDR_TR register. 
         #[cfg(feature = "h8")]
-        self.regs.tr.modify(|_, w| unsafe { w.hit().bits(hit_num) });
+        self.regs.tr().modify(|_, w| unsafe { w.hit().bits(hit_num) });
         #[cfg(feature = "g5")]
-        self.regs.tr.modify(|_, w| unsafe { w.hitn().bits(hit_num) });
+        self.regs.tr().modify(|_, w| unsafe { w.hitn().bits(hit_num) });
 
         // 2. Begin tracking by setting the TRKEN bit in the FCRDR_TR register.
-        self.regs.tr.modify(|_, w| w.trken().set_bit());
+        self.regs.tr().modify(|_, w| w.trken().bit(true));
 
         // In tracking mode, the TA flag can be monitored to make sure that the radar
         // is still tracking the target.
@@ -290,18 +296,18 @@ where
     
     /// Enable an interrupt.
     pub fn enable_interrupt(&mut self, interrupt: FcRadarInterrupt) {
-        self.regs.cr.modify(|_, w| match interrupt {
-            FcRadarInterrupt::TgtAcq => w.taie().set_bit(),
-            FcRadarInterrupt::LostTrack => w.ltie().set_bit(),
+        self.regs.cr().modify(|_, w| match interrupt {
+            FcRadarInterrupt::TgtAcq => w.taie().bit(true),
+            FcRadarInterrupt::LostTrack => w.ltie().bit(true),
         });
     }
 
     /// Clear an interrupt flag - run this in the interrupt's handler to prevent
     /// repeat firings.
     pub fn clear_interrupt(&mut self, interrupt: FcRadarInterrupt) {
-        self.regs.icr.write(|w| match interrupt {
-            FcRadarInterrupt::TgtAcq =>  w.tacf().set_bit(),
-            FcRadarInterrupt::LostTrack => w.ltcf().set_bit(),
+        self.regs.icr().write(|w| match interrupt {
+            FcRadarInterrupt::TgtAcq =>  w.tacf().bit(true),
+            FcRadarInterrupt::LostTrack => w.ltcf().bit(true),
         });
     }
 }
@@ -316,11 +322,12 @@ This library doesn't include any radio functionality for the STM32WB. If you'd l
 with bluetooth, use this HAL in conjuction with with [@eupn](https://github.com/eupn)'s [stm32wb55](https://github.com/eupn/stm32wb55)
 bluetooth library.
 
-STM32WL radio support is WIP, and will be provided through interaction with newAM's
-[stm32wl-hal](https://github.com/newAM/stm32wl-hal) library.
+For STM32WL radio support, use this in conjunction with the [semtech-radios](https://github.com/David-OConnor/semtech-radios)
+library.
 
 
 ## Errata
+- July 2025: H735 ADC inop; needs patch. Comp inop.
 - SDIO and ethernet unimplemented
 - DMA unimplemented on F4, and L552
 - H7 BDMA and MDMA unimplemented
